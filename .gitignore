@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next.js
+.next/
+out/
+
+# production
+build/
+
+# misc
+.DS_Store
+*.pem
+.env.local
+.env*.local
+
+# debug
+npm-debug.log*
+pnpm-debug.log*
+
+# typescript
+next-env.d.ts
+
+# data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# screenshots and test artifacts
+*.png
+test-screens/
