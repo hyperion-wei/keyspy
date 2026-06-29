@@ -6,6 +6,9 @@ import {
   updateHuntFinding,
   deleteHuntFinding,
   createMonitorConfig,
+  findMonitorConfigsByKey,
+  getAllTemplates,
+  type MonitorTemplateParsed,
   HuntFinding,
 } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
@@ -154,8 +157,54 @@ export async function GET(request: Request) {
 }
 
 /**
+ * provider 关键词 → 模板名称的映射（用于自动匹配模板）
+ */
+const PROVIDER_TO_TEMPLATE: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  claude: "Anthropic",
+  google: "Gemini",
+  gemini: "Gemini",
+  minimax: "MiniMax",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  moonshot: "Kimi",
+  zhipu: "智谱",
+  glm: "智谱",
+  dashscope: "阿里百炼",
+  qwen: "阿里百炼",
+  alibaba: "阿里百炼",
+  hunyuan: "腾讯混元",
+  tencent: "腾讯混元",
+  doubao: "豆包",
+  bytedance: "豆包",
+  volcengine: "豆包",
+  siliconflow: "硅基流动",
+};
+
+/**
+ * 按 provider 查找匹配的内置模板
+ */
+function matchTemplate(provider: string | null): MonitorTemplateParsed | null {
+  if (!provider || provider === "unknown") return null;
+  const templates = getAllTemplates();
+  const tplName = PROVIDER_TO_TEMPLATE[provider.toLowerCase()];
+  if (tplName) {
+    return templates.find((t) => t.name === tplName && t.built_in) || null;
+  }
+  // 模糊匹配：模板名包含 provider 或 provider 包含模板名
+  return templates.find((t) => {
+    const n = t.name.toLowerCase();
+    const p = provider.toLowerCase();
+    return t.built_in && (n.includes(p) || p.includes(n));
+  }) || null;
+}
+
+/**
  * POST /api/hunt/results
  * 将发现添加到监控配置
+ * - 检查 key 是否已存在于监控中（去重）
+ * - 按 provider 匹配内置模板，优先使用模板设置
  */
 export async function POST(request: Request) {
   const user = await getAuthUser();
@@ -164,28 +213,54 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { findingId, name, type, base_url, api_key, model, group_name } = body;
+  const { findingId, name, type, base_url, api_key, model, group_name, force } = body;
 
   if (!findingId || !name || !api_key || !model) {
     return Response.json({ error: "缺少必要参数" }, { status: 400 });
   }
 
+  // 1. 去重检查：该 key 是否已在监控配置中
+  const existing = findMonitorConfigsByKey(api_key);
+  if (existing.length > 0 && !force) {
+    return Response.json({
+      success: false,
+      duplicate: true,
+      existingConfigs: existing.map((c) => ({ id: c.id, name: c.name, model: c.model, group_name: c.group_name })),
+      message: `该 Key 已存在于监控配置「${existing.map((c) => c.name).join("、")}」中`,
+    });
+  }
+
+  // 2. 匹配内置模板
+  const tpl = matchTemplate(body.provider);
+
+  // 3. 优先使用模板设置
+  const finalType = tpl?.type || type || "openai";
+  const finalBaseUrl = tpl ? tpl.base_url : normalizeBaseUrl(base_url || "");
+  const finalModel = tpl ? tpl.default_model : model;
+  const fallbackModels = tpl ? JSON.stringify(tpl.models.filter((m) => m !== tpl.default_model)) : "[]";
+
   try {
-    // 创建监控配置
     createMonitorConfig({
       name,
-      type: type || "openai",
-      base_url: normalizeBaseUrl(base_url || ""),
+      type: finalType,
+      base_url: finalBaseUrl,
       api_key,
-      model,
+      model: finalModel,
       group_name: group_name || "Hunt 发现",
       enabled: 1,
+      template_id: tpl?.id ?? null,
+      fallback_models: fallbackModels,
     });
 
-    // 更新 finding 状态
     updateHuntFindingMonitorStatus(findingId, true);
 
-    return Response.json({ success: true, message: "已添加到监控配置" });
+    return Response.json({
+      success: true,
+      message: tpl
+        ? `已添加到监控配置（使用 ${tpl.name} 模板）`
+        : "已添加到监控配置",
+      templateUsed: tpl ? { name: tpl.name, base_url: tpl.base_url, model: tpl.default_model } : null,
+    });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "添加失败" },

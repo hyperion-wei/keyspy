@@ -41,7 +41,7 @@ const metrics: FrontendCacheMetrics = {
 
 const globalMetrics = globalThis as Record<string, unknown>;
 if (typeof window !== "undefined") {
-  globalMetrics.__CHECK_CX_FRONTEND_CACHE_METRICS__ = metrics;
+  globalMetrics.__KEYSPY_FRONTEND_CACHE_METRICS__ = metrics;
 }
 
 function recordHit(isStale: boolean): void {
@@ -150,7 +150,7 @@ export async function prefetchDashboardData(
           return data;
         })
         .catch((error) => {
-          console.error("[check-cx] 预取 dashboard 失败", error);
+          console.error("[keyspy] 预取 dashboard 失败", error);
           return null;
         })
         .finally(() => {
@@ -233,7 +233,7 @@ function revalidateInBackground(
       }
     })
     .catch((error) => {
-      console.error("[check-cx] 后台刷新失败", error);
+      console.error("[keyspy] 后台刷新失败", error);
       return null;
     })
     .finally(() => {

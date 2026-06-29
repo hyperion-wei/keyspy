@@ -121,7 +121,7 @@ function LoginPageContent() {
             <Activity className="h-8 w-8" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
-            Check CX
+            KeySpy
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {isLogin ? "登录到您的账户" : "创建新账户"}

@@ -26,7 +26,7 @@ export function DashboardBootstrap() {
       setErrorMessage(null);
       setData(result.data);
     } catch (error) {
-      console.error("[check-cx] 首屏加载失败", error);
+      console.error("[keyspy] 首屏加载失败", error);
       setErrorMessage("数据加载失败，请稍后重试");
     }
   }, []);
@@ -53,7 +53,7 @@ export function DashboardBootstrap() {
         if (!isActive) {
           return;
         }
-        console.error("[check-cx] 首屏加载失败", error);
+        console.error("[keyspy] 首屏加载失败", error);
         setErrorMessage("数据加载失败，请稍后重试");
       }
     };

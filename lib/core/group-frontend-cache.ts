@@ -24,7 +24,7 @@ const metrics: GroupCacheMetrics = {
 
 const globalMetrics = globalThis as Record<string, unknown>;
 if (typeof window !== "undefined") {
-  globalMetrics.__CHECK_CX_GROUP_CACHE_METRICS__ = metrics;
+  globalMetrics.__KEYSPY_GROUP_CACHE_METRICS__ = metrics;
 }
 
 function recordHit(isStale: boolean): void {
@@ -141,7 +141,7 @@ export async function prefetchGroupData(
           return data;
         })
         .catch((error) => {
-          console.error("[check-cx] 预取分组数据失败", error);
+          console.error("[keyspy] 预取分组数据失败", error);
           return null;
         })
         .finally(() => {
@@ -213,7 +213,7 @@ function revalidateInBackground(
       return null;
     })
     .catch((error) => {
-      console.error("[check-cx] 分组后台刷新失败", error);
+      console.error("[keyspy] 分组后台刷新失败", error);
       return null;
     })
     .finally(() => {

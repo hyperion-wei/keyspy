@@ -1,0 +1,96 @@
+# 增强版敏感信息扫描规则
+# 用法: gitleaks dir <目录> -c enhanced-rules.toml -v
+
+title = "Enhanced Sensitive Info Scanner"
+
+# ====== 1. 明文账密 ======
+[[rules]]
+id = "plaintext-password"
+description = "明文密码 (pwd=、passwd=、password=)"
+regex = '''(?i)(?:password|passwd|pwd|pass|psw|口令)\s*[=:]\s*['"]?([^\s'"]{4,50})['"]?'''
+keywords = ["password", "passwd", "pwd", "pass", "psw"]
+
+[[rules]]
+id = "plaintext-username-password"
+description = "用户名+密码组合"
+regex = '''(?i)(?:user|username|login|account)\s*[=:]\s*['"]?(\S{2,50})['"]?\s*[,;].*?(?:pwd|password|passwd)\s*[=:]\s*['"]?(\S{4,50})['"]?'''
+keywords = ["user", "username", "login", "account"]
+
+[[rules]]
+id = "connection-string"
+description = "数据库连接字符串 (含密码)"
+regex = '''(?i)(?:mongodb|postgres|mysql|mssql|jdbc|redis|amqp)://[^:\s]+:[^@\s]+@[^\s]+'''
+keywords = ["://"]
+
+# ====== 2. IP 地址 ======
+[[rules]]
+id = "all-ip"
+description = "所有 IP 地址 (含内网和公网)"
+regex = '''\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b'''
+keywords = ["."]
+[[rules.allowlists]]
+regexes = ['''0\.0\.0\.0''']
+
+# ====== 3. 域名 ======
+[[rules]]
+id = "domain-name"
+description = "域名 (含子域名、多级域名)"
+regex = '''\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|cn|edu|gov|mil|io|dev|app|co|cc|xyz|info|top|vip|work|club|site|online|tech|cloud|me|tv|uk|de|jp|ru|in|br|au|hk|tw)\b'''
+keywords = [".com", ".cn", ".net", ".org", ".io", ".dev", ".app", ".edu", ".gov"]
+[[rules.allowlists]]
+regexes = ['''(?i)(?:node_modules|npmjs|github|gitlab|bitbucket|pypi|w3\.org|schema\.org|apache\.org|gnu\.org|microsoft\.com|google\.com|mozilla\.org|openssl\.org|ietf\.org|example\.com|golang\.org|openxmlformats\.org|purl\.org|schemas\.microsoft)''']
+
+[[rules]]
+id = "full-url"
+description = "完整 URL (http/https/ftp)"
+regex = '''https?://[^\s'"<>\]\)]+|ftp://[^\s'"<>\]\)]+'''
+keywords = ["http://", "https://", "ftp://"]
+
+# ====== 4. 内网 URL ======
+[[rules]]
+id = "internal-url"
+description = "内网 URL / API 端点"
+regex = '''https?://(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|[\w.-]+\.local|[\w.-]+\.internal)[^\s'"]*'''
+keywords = ["localhost", "127.0.0.1", ".local", ".internal"]
+
+# ====== 4. 邮箱/手机号 ======
+[[rules]]
+id = "email-address"
+description = "邮箱地址"
+regex = '''\b[\w.+-]+@[\w-]+\.[\w.-]+\b'''
+keywords = ["@"]
+[rules.allowlists]
+regexes = ['''(?i)@(example|test|localhost|domain|placeholder)\.''']
+
+[[rules]]
+id = "chinese-phone"
+description = "中国大陆手机号"
+regex = '''\b1[3-9]\d{9}\b'''
+keywords = ["13", "15", "18", "17"]
+
+# ====== 5. 身份证号 ======
+[[rules]]
+id = "chinese-id-card"
+description = "中国身份证号 (18位)"
+regex = '''\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b'''
+keywords = ["身份证", "id_card", "idcard", "sfzh"]
+
+# ====== 6. SSH/RDP 配置 ======
+[[rules]]
+id = "ssh-config"
+description = "SSH 配置信息"
+regex = '''(?i)(?:HostName|Host)\s+(\S+)\s*\n\s*(?:User|Port|IdentityFile)\s+(\S+)'''
+keywords = ["HostName", "Host "]
+
+[[rules]]
+id = "rdp-config"
+description = "RDP 连接配置"
+regex = '''(?i)(?:full address|username)\s*[=:]\s*[s:i]?:?(\S+)'''
+keywords = ["full address", "username"]
+
+# ====== 7. 环境变量泄露 ======
+[[rules]]
+id = "env-secret"
+description = ".env 文件中的敏感配置"
+regex = '''(?i)^[A-Z_]*(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*\s*=\s*\S+'''
+keywords = ["KEY", "SECRET", "TOKEN", "PASSWORD"]

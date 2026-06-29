@@ -80,7 +80,7 @@ function HomeContent() {
       <footer className="mt-16 border-t border-border/40">
         <div className="mx-auto flex w-full max-w-[1600px] flex-col items-center justify-between gap-4 px-3 py-6 sm:flex-row sm:px-6 lg:px-12">
           <div className="text-sm text-muted-foreground">
-            © <ClientYear placeholder="2026" /> Check CX. All rights reserved.
+            © <ClientYear placeholder="2026" /> KeySpy. All rights reserved.
           </div>
 
           <div className="flex items-center gap-4">

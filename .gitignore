@@ -1,33 +1,69 @@
-# dependencies
+# ========================
+# KeySpy .gitignore
+# ========================
+
+# ---- Dependencies ----
 node_modules/
 .pnpm-store/
 
-# next.js
+# ---- Next.js ----
 .next/
 out/
 
-# production
+# ---- Build ----
 build/
+dist/
+*.tsbuildinfo
 
-# misc
-.DS_Store
-*.pem
+# ---- Environment / Secrets ----
+.env
+.env.*
+!.env.example
 .env.local
-.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
 
-# debug
-npm-debug.log*
-pnpm-debug.log*
+# ---- Credentials & Tokens ----
+cookies.txt
+credentials.json
+service-account*.json
+*.credentials
 
-# typescript
-next-env.d.ts
-
-# data
+# ---- Database ----
 data/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
 
-# screenshots and test artifacts
-*.png
+# ---- OS / Editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---- Debug Logs ----
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- TypeScript ----
+next-env.d.ts
+
+# ---- Screenshots & Test Artifacts ----
 test-screens/
+
+# ---- Large Binaries (gitleaks > 20MB) ----
+tools/gitleaks/gitleaks.exe
+tools/gitleaks/gitleaks

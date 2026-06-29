@@ -28,6 +28,7 @@ import {
   Trash2,
   X,
   ChevronDown,
+  Zap,
 } from "lucide-react";
 
 // ===== 类型定义 =====
@@ -241,7 +242,7 @@ function HuntContent() {
         </Link>
         <div className="flex items-center gap-2">
           <Crosshair className="h-4 w-4 text-primary" />
-          <span className="text-sm font-semibold">Hunt - Key 泄露扫描</span>
+          <span className="text-sm font-semibold">KeySpy - Key 泄露扫描</span>
         </div>
       </div>
 
@@ -614,6 +615,7 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
   const [tasks, setTasks] = useState<HuntTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -650,6 +652,28 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
     }
   }
 
+  async function handleDeleteAllTasks() {
+    const deletableTasks = tasks.filter(t => t.status !== "running");
+    if (deletableTasks.length === 0) {
+      alert("没有可删除的任务");
+      return;
+    }
+    if (!confirm(`确定删除 ${deletableTasks.length} 个任务及其所有发现？此操作不可恢复。`)) return;
+
+    setDeletingAll(true);
+    let deleted = 0;
+    for (const task of deletableTasks) {
+      try {
+        const res = await fetch(`/api/hunt/tasks?id=${task.id}`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) deleted++;
+      } catch { /* ignore */ }
+    }
+    setDeletingAll(false);
+    alert(`已删除 ${deleted}/${deletableTasks.length} 个任务`);
+    fetchTasks();
+  }
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center rounded-xl border border-border/40 bg-card">
@@ -672,6 +696,27 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          共 <span className="font-semibold text-foreground">{tasks.length}</span> 个扫描任务
+        </p>
+        <button
+          onClick={handleDeleteAllTasks}
+          disabled={deletingAll || tasks.filter(t => t.status !== "running").length === 0}
+          className={cn(
+            "flex items-center gap-1.5 rounded-lg border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10",
+            "disabled:cursor-not-allowed disabled:opacity-50"
+          )}
+        >
+          {deletingAll ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
+          )}
+          {deletingAll ? "删除中..." : "一键删除全部"}
+        </button>
+      </div>
+
       {tasks.map((task) => {
         const progress = task.total > 0 ? Math.round((task.completed / task.total) * 100) : 0;
         const isRunning = task.status === "running";
@@ -821,11 +866,20 @@ interface EditForm {
   key_value: string;
 }
 
+interface WorkedTemplate {
+  template: string;
+  templateId: number;
+  type: string;
+  base_url: string;
+  model: string;
+}
+
 interface TestResult {
   success: boolean;
   latency_ms: number;
   message: string;
   response_preview?: string;
+  worked?: WorkedTemplate[];
 }
 
 function ScanResultsTab() {
@@ -839,6 +893,9 @@ function ScanResultsTab() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedAnalyses, setExpandedAnalyses] = useState<Set<number>>(new Set());
   const [deletingSource, setDeletingSource] = useState<number | null>(null);
+  const [batchTesting, setBatchTesting] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ tested: number; total: number } | null>(null);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const fetchFindings = useCallback(async () => {
     try {
@@ -964,11 +1021,30 @@ function ScanResultsTab() {
     }
   }
 
-  async function handleAddToMonitor(finding: HuntFinding) {
+  async function handleAddToMonitor(finding: HuntFinding, force = false, workedIdx?: number) {
     if (!finding.key_value) {
       alert("无有效的 API Key");
       return;
     }
+
+    // 从测试结果中获取可用的模板
+    const testResult = testResults[finding.id];
+    const worked = testResult?.worked || [];
+
+    // 如果有可用模板但还没选，让用户选择
+    if (worked.length > 1 && workedIdx === undefined) {
+      const choices = worked.map((w, i) => `${i + 1}. ${w.template} (${w.model})`).join("\n");
+      const input = prompt(`该 Key 在以下模板可用，请选择一个：\n\n${choices}\n\n输入数字选择（回车用第一个）：`);
+      if (input === null) return; // 取消
+      const idx = parseInt(input, 10) - 1;
+      if (idx >= 0 && idx < worked.length) {
+        handleAddToMonitor(finding, force, idx);
+        return;
+      }
+      // 默认第一个
+    }
+
+    const selectedWorked = workedIdx !== undefined ? worked[workedIdx] : worked[0];
 
     setAddingId(finding.id);
     try {
@@ -977,17 +1053,34 @@ function ScanResultsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           findingId: finding.id,
-          name: `Hunt: ${finding.provider || "unknown"} - ${finding.target_url}`,
-          type: finding.provider || "openai",
-          base_url: normalizeBaseUrl(finding.base_url || finding.target_url),
+          name: `Hunt: ${selectedWorked?.template || finding.provider || "unknown"} - ${finding.target_url}`,
+          type: selectedWorked?.type || finding.provider || "openai",
+          base_url: selectedWorked?.base_url || normalizeBaseUrl(finding.base_url || finding.target_url),
           api_key: finding.key_value,
-          model: finding.model || "gpt-3.5-turbo",
+          model: selectedWorked?.model || finding.model || "gpt-3.5-turbo",
+          provider: finding.provider,
           group_name: "Hunt 发现",
+          force,
         }),
       });
       const data = await res.json();
+
+      // 去重提示：该 key 已存在于监控中
+      if (data.duplicate) {
+        const names = data.existingConfigs.map((c: { name: string }) => c.name).join("、");
+        if (confirm(`该 Key 已存在于监控配置「${names}」中，是否仍然要重复添加？`)) {
+          handleAddToMonitor(finding, true, workedIdx);
+          return;
+        }
+        return;
+      }
+
       if (data.success) {
         fetchFindings();
+        // 显示模板匹配信息
+        if (data.templateUsed) {
+          alert(`✅ ${data.message}\n\n模板: ${data.templateUsed.name}\nBase URL: ${data.templateUsed.base_url}\n默认模型: ${data.templateUsed.model}`);
+        }
       } else {
         alert(data.error || "添加失败");
       }
@@ -996,6 +1089,130 @@ function ScanResultsTab() {
     } finally {
       setAddingId(null);
     }
+  }
+
+  /**
+   * 一键测试全部：遍历所有有 key_value 的 finding，用所有模板测试
+   */
+  async function handleBatchTestAll() {
+    const testable = findings.filter(f => f.key_value);
+    if (testable.length === 0) {
+      alert("没有可测试的 Key");
+      return;
+    }
+    if (!confirm(`将用所有模板测试 ${testable.length} 个 Key 的可用性，是否继续？`)) return;
+
+    setBatchTesting(true);
+    setBatchProgress({ tested: 0, total: testable.length });
+
+    for (let i = 0; i < testable.length; i++) {
+      const f = testable[i];
+      setTestingId(f.id);
+      try {
+        const res = await fetch("/api/hunt/test-all", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: f.key_value }),
+        });
+        const data = await res.json();
+        const workedNames = data.worked?.map((w: { template: string }) => w.template).join(", ") || "";
+        setTestResults(prev => ({ ...prev, [f.id]: {
+          success: data.usable,
+          latency_ms: 0,
+          message: data.usable
+            ? `可用: ${workedNames}`
+            : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
+          worked: data.worked || [],
+        }}));
+      } catch (err) {
+        setTestResults(prev => ({
+          ...prev,
+          [f.id]: { success: false, latency_ms: 0, message: `请求失败: ${err instanceof Error ? err.message : String(err)}` },
+        }));
+      }
+      setBatchProgress({ tested: i + 1, total: testable.length });
+    }
+
+    setTestingId(null);
+    setBatchTesting(false);
+    setBatchProgress(null);
+  }
+
+  /**
+   * 一键删除不可用：基于已有测试结果，删除测试失败的
+   * 如果还没有测试结果，先跑测试
+   */
+  async function handleDeleteUnavailable() {
+    // 找出有 key_value 但没有测试结果的
+    const testable = findings.filter(f => f.key_value);
+    const notTested = testable.filter(f => !testResults[f.id]);
+    const tested = testable.filter(f => testResults[f.id]);
+
+    if (notTested.length > 0) {
+      if (!confirm(`有 ${notTested.length} 个 Key 还没有测试结果，是否先测试？(共 ${testable.length} 个)`)) return;
+    }
+
+    // 测试还没有结果的
+    if (notTested.length > 0) {
+      setBatchTesting(true);
+      setBatchProgress({ tested: 0, total: notTested.length });
+
+      for (let i = 0; i < notTested.length; i++) {
+        const f = notTested[i];
+        setTestingId(f.id);
+        try {
+          const res = await fetch("/api/hunt/test-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: f.key_value }),
+          });
+          const data = await res.json();
+          const workedNames = data.worked?.map((w: { template: string }) => w.template).join(", ") || "";
+          setTestResults(prev => ({ ...prev, [f.id]: {
+            success: data.usable,
+            latency_ms: 0,
+            message: data.usable
+              ? `可用: ${workedNames}`
+              : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
+            worked: data.worked || [],
+          }}));
+        } catch { /* ignore */ }
+        setBatchProgress({ tested: i + 1, total: notTested.length });
+      }
+
+      setTestingId(null);
+      setBatchTesting(false);
+      setBatchProgress(null);
+    }
+
+    // 现在所有 key 都有测试结果了，找出失败的
+    const failedIds: number[] = [];
+    for (const f of testable) {
+      const result = testResults[f.id];
+      if (!result?.success) {
+        failedIds.push(f.id);
+      }
+    }
+
+    if (failedIds.length === 0) {
+      alert("所有 Key 至少在一个模板上可用，无需删除");
+      return;
+    }
+
+    if (!confirm(`发现 ${failedIds.length} 个 Key 在所有模板上均不可用，是否删除？`)) return;
+
+    setBatchDeleting(true);
+    let deleted = 0;
+    for (const id of failedIds) {
+      try {
+        const res = await fetch(`/api/hunt/results?id=${id}&action=delete`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) deleted++;
+      } catch { /* ignore */ }
+    }
+    setBatchDeleting(false);
+    alert(`已删除 ${deleted}/${failedIds.length} 个不可用 Key`);
+    fetchFindings();
   }
 
   function getConfidenceColor(confidence: string) {
@@ -1031,10 +1248,49 @@ function ScanResultsTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-sm text-muted-foreground">
           共发现 <span className="font-semibold text-foreground">{findings.length}</span> 个潜在泄露
+          {batchProgress && (
+            <span className="ml-2 text-xs text-blue-600">
+              (测试中: {batchProgress.tested}/{batchProgress.total})
+            </span>
+          )}
         </p>
+        <div className="flex items-center gap-2">
+          {/* 一键测试全部 */}
+          <button
+            onClick={handleBatchTestAll}
+            disabled={batchTesting || findings.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted",
+              "disabled:cursor-not-allowed disabled:opacity-50"
+            )}
+          >
+            {batchTesting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FlaskConical className="h-3.5 w-3.5" />
+            )}
+            {batchTesting ? "测试中..." : "一键测试全部"}
+          </button>
+          {/* 一键删除不可用 */}
+          <button
+            onClick={handleDeleteUnavailable}
+            disabled={batchTesting || batchDeleting || findings.length === 0}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10",
+              "disabled:cursor-not-allowed disabled:opacity-50"
+            )}
+          >
+            {batchDeleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            {batchDeleting ? "删除中..." : "一键删除不可用"}
+          </button>
+        </div>
       </div>
 
       {findings.map((finding) => {

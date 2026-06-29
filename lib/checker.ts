@@ -60,7 +60,7 @@ async function tryPing(url: string, method: "HEAD" | "GET"): Promise<number | nu
       method,
       cache: "no-store",
       redirect: "manual",
-      headers: { "User-Agent": "check-cx-ui/ping" },
+      headers: { "User-Agent": "keyspy/ping" },
       signal: controller.signal,
     });
     return Date.now() - startedAt;
@@ -270,7 +270,7 @@ function buildOpenAIRequest(config: MonitorConfig, prompt: string): RequestPaylo
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${config.api_key}`,
-      "User-Agent": "check-cx-ui/1.0",
+      "User-Agent": "keyspy/1.0",
     },
     body: {
       model: config.model,
@@ -291,7 +291,7 @@ function buildAnthropicRequest(config: MonitorConfig, prompt: string): RequestPa
       "Content-Type": "application/json",
       "x-api-key": config.api_key,
       "anthropic-version": "2023-06-01",
-      "User-Agent": "check-cx-ui/1.0",
+      "User-Agent": "keyspy/1.0",
     },
     body: {
       model: config.model,
@@ -317,7 +317,7 @@ function buildGeminiRequest(config: MonitorConfig, prompt: string): RequestPaylo
     url: endpoint,
     headers: {
       "Content-Type": "application/json",
-      "User-Agent": "check-cx-ui/1.0",
+      "User-Agent": "keyspy/1.0",
     },
     body: {
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },

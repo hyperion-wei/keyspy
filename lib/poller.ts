@@ -30,13 +30,13 @@ function logFailedResults(results: ApiCheckResult[]): void {
   const failed = results.filter((r) => FAILURE_STATUSES.has(r.status));
   if (failed.length === 0) return;
 
-  console.error(`[check-cx-ui] 本轮检测失败：${failed.length}/${results.length} 条`);
+  console.error(`[keyspy] 本轮检测失败：${failed.length}/${results.length} 条`);
   for (const r of failed.sort((a, b) => a.name.localeCompare(b.name))) {
     console.error(
-      `[check-cx-ui]   - ${r.name} (${r.type}/${r.model}) -> ${r.status} | latency=${formatDuration(r.latency_ms)} | ping=${formatDuration(r.ping_latency_ms)} | ${r.endpoint}`
+      `[keyspy]   - ${r.name} (${r.type}/${r.model}) -> ${r.status} | latency=${formatDuration(r.latency_ms)} | ping=${formatDuration(r.ping_latency_ms)} | ${r.endpoint}`
     );
     if (r.message) {
-      console.error(`[check-cx-ui]     message: ${r.message}`);
+      console.error(`[keyspy]     message: ${r.message}`);
     }
   }
 }
@@ -49,7 +49,7 @@ async function tick(): Promise<void> {
   if (isRunning) {
     const duration = lastStartedAt ? Date.now() - lastStartedAt : null;
     console.log(
-      `[check-cx-ui] 跳过本轮：上一轮仍在执行${duration !== null ? `（已耗时 ${duration}ms）` : ""}`
+      `[keyspy] 跳过本轮：上一轮仍在执行${duration !== null ? `（已耗时 ${duration}ms）` : ""}`
     );
     return;
   }
@@ -89,10 +89,10 @@ async function tick(): Promise<void> {
     logFailedResults(results);
 
     console.log(
-      `[check-cx-ui] 检测完成：${results.length} 条，耗时 ${Date.now() - lastStartedAt}ms`
+      `[keyspy] 检测完成：${results.length} 条，耗时 ${Date.now() - lastStartedAt}ms`
     );
   } catch (error) {
-    console.error("[check-cx-ui] 轮询检测失败", error);
+    console.error("[keyspy] 轮询检测失败", error);
   } finally {
     isRunning = false;
   }
@@ -103,7 +103,7 @@ async function tick(): Promise<void> {
  */
 function startPoller(): void {
   if (timer !== null) {
-    console.log("[check-cx-ui] 轮询器已在运行，跳过重复启动");
+    console.log("[keyspy] 轮询器已在运行，跳过重复启动");
     return;
   }
 
@@ -111,15 +111,15 @@ function startPoller(): void {
   const intervalMs = Math.max(MIN_POLL_INTERVAL_MS, intervalSeconds * 1000);
 
   console.log(
-    `[check-cx-ui] 启动后台轮询器，间隔 ${intervalSeconds}s (${intervalMs}ms)`
+    `[keyspy] 启动后台轮询器，间隔 ${intervalSeconds}s (${intervalMs}ms)`
   );
 
   // 启动后立即执行一次
-  tick().catch((error) => console.error("[check-cx-ui] 首次检测失败", error));
+  tick().catch((error) => console.error("[keyspy] 首次检测失败", error));
 
   // 定时执行
   timer = setInterval(() => {
-    tick().catch((error) => console.error("[check-cx-ui] 定时检测失败", error));
+    tick().catch((error) => console.error("[keyspy] 定时检测失败", error));
   }, intervalMs);
 }
 
@@ -128,21 +128,21 @@ function startPoller(): void {
 // 通过 setImmediate 推到下一个事件循环，确保 poller 在 db 模块完全加载后再启动。
 declare global {
   // eslint-disable-next-line no-var
-  var __checkCxUiPollerStarted: boolean | undefined;
+  var __keyspyPollerStarted: boolean | undefined;
 }
 
 if (
   process.env.NEXT_RUNTIME === "nodejs" &&
   process.env.NODE_ENV !== "test" &&
   typeof window === "undefined" &&
-  !globalThis.__checkCxUiPollerStarted
+  !globalThis.__keyspyPollerStarted
 ) {
-  globalThis.__checkCxUiPollerStarted = true;
+  globalThis.__keyspyPollerStarted = true;
   setImmediate(() => {
     try {
       startPoller();
     } catch (error) {
-      console.error("[check-cx-ui] 启动后台轮询器失败", error);
+      console.error("[keyspy] 启动后台轮询器失败", error);
     }
   });
 }

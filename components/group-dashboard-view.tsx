@@ -104,7 +104,7 @@ export function GroupDashboardView({ groupName, initialData }: GroupDashboardVie
       });
       setData(result.data);
     } catch (error) {
-      console.error("[check-cx] 分组自动刷新失败", error);
+      console.error("[keyspy] 分组自动刷新失败", error);
     } finally {
       setIsRefreshing(false);
       lockRef.current = false;

@@ -19,8 +19,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LINUX DO - 模型中转状态检测",
-  description: "实时检测 OpenAI / Gemini / Anthropic 对话接口的可用性与延迟",
+  title: "KeySpy - AI API Key 泄露检测与可用性监控",
+  description: "实时扫描检测 OpenAI / Gemini / Anthropic 等 API Key 泄露，一键测试与监控管理",
   icons: {
     icon: "/favicon.png",
   },

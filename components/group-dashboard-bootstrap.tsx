@@ -33,7 +33,7 @@ export function GroupDashboardBootstrap({ groupName }: GroupDashboardBootstrapPr
         setErrorMessage(null);
         setData(result.data);
       } catch (error) {
-        console.error("[check-cx] 分组首屏加载失败", error);
+        console.error("[keyspy] 分组首屏加载失败", error);
         setErrorMessage("数据加载失败，请稍后重试");
       }
     },
@@ -63,7 +63,7 @@ export function GroupDashboardBootstrap({ groupName }: GroupDashboardBootstrapPr
         if (!isActive) {
           return;
         }
-        console.error("[check-cx] 分组首屏加载失败", error);
+        console.error("[keyspy] 分组首屏加载失败", error);
         setErrorMessage("数据加载失败，请稍后重试");
       }
     };

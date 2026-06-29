@@ -391,12 +391,12 @@ export function DashboardView({ initialData }: DashboardViewProps) {
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      const savedSortMode = localStorage.getItem("check-cx-sort-mode");
+      const savedSortMode = localStorage.getItem("keyspy-sort-mode");
       if (savedSortMode && ["custom", "group", "name"].includes(savedSortMode)) {
         setSortMode(savedSortMode as SortMode);
       }
 
-      const saved = localStorage.getItem("check-cx-group-order");
+      const saved = localStorage.getItem("keyspy-group-order");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -415,7 +415,7 @@ export function DashboardView({ initialData }: DashboardViewProps) {
         }
       }
 
-      const savedTags = localStorage.getItem("check-cx-selected-tags");
+      const savedTags = localStorage.getItem("keyspy-selected-tags");
       if (savedTags) {
         try {
           const parsed = JSON.parse(savedTags);
@@ -434,14 +434,14 @@ export function DashboardView({ initialData }: DashboardViewProps) {
   // Save sort mode to localStorage when it changes
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("check-cx-sort-mode", sortMode);
+      localStorage.setItem("keyspy-sort-mode", sortMode);
     }
   }, [sortMode]);
 
   // Save selected tags to localStorage when they change
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("check-cx-selected-tags", JSON.stringify(selectedTags));
+      localStorage.setItem("keyspy-selected-tags", JSON.stringify(selectedTags));
     }
   }, [selectedTags]);
 
@@ -476,7 +476,7 @@ export function DashboardView({ initialData }: DashboardViewProps) {
         
         // Save to localStorage
         if (typeof window !== "undefined") {
-          localStorage.setItem("check-cx-group-order", JSON.stringify(newOrder));
+          localStorage.setItem("keyspy-group-order", JSON.stringify(newOrder));
         }
         
         return newOrder;
@@ -504,7 +504,7 @@ export function DashboardView({ initialData }: DashboardViewProps) {
       });
       setData(result.data);
     } catch (error) {
-      console.error("[check-cx] 刷新失败", error);
+      console.error("[keyspy] 刷新失败", error);
     } finally {
       setIsRefreshing(false);
     }
@@ -749,11 +749,11 @@ export function DashboardView({ initialData }: DashboardViewProps) {
               <Activity className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </div>
             <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground sm:text-sm">
-              System Status
+              KeySpy
             </span>
             <div className="h-3 w-[1px] bg-border/60 sm:h-4" />
             <Link
-              href="https://github.com/BingZi-233/check-cx"
+              href="https://github.com/BingZi-233/keyspy"
               target="_blank"
               className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:text-xs"
             >
@@ -765,15 +765,15 @@ export function DashboardView({ initialData }: DashboardViewProps) {
           </div>
           
           <h1 className="max-w-2xl text-3xl font-extrabold leading-tight tracking-tight sm:text-5xl md:text-6xl">
-            AI SERVICES <br />
+            AI API KEY <br />
             <span className="text-muted-foreground">INTELLIGENCE MONITOR</span>
           </h1>
           
           <div className="flex max-w-lg flex-col gap-2 text-sm text-muted-foreground sm:text-base">
              <p className="leading-relaxed">
-               实时追踪各大 AI 模型对话接口的可用性、延迟与官方服务状态。
+               实时追踪各大 AI 模型对话接口的可用性、延迟与 Key 泄露检测。
                <br />
-               Advanced performance metrics for next-gen intelligence.
+               Advanced performance & security monitoring for AI APIs.
              </p>
           </div>
         </div>

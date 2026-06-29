@@ -107,7 +107,7 @@ function stringifySanitizedError(error: unknown): string {
  * @param error 错误对象
  */
 export function logError(context: string, error: unknown): void {
-  console.error(`[check-cx] ${context}:`, sanitizeError(error));
+  console.error(`[keyspy] ${context}:`, sanitizeError(error));
 }
 
 export function getSanitizedErrorDetail(error: unknown): string {

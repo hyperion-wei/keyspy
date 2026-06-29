@@ -7,20 +7,20 @@
 
 /**
  * 全局缓存键类型定义
- * 格式: __CHECK_CX_${PROVIDER}_CLIENTS__
+ * 格式: __KEYSPY_${PROVIDER}_CLIENTS__
  */
 type GlobalCacheKey =
-  | "__CHECK_CX_OPENAI_CLIENTS__"
-  | "__CHECK_CX_GEMINI_CLIENTS__"
-  | "__CHECK_CX_ANTHROPIC_CLIENTS__";
+  | "__KEYSPY_OPENAI_CLIENTS__"
+  | "__KEYSPY_GEMINI_CLIENTS__"
+  | "__KEYSPY_ANTHROPIC_CLIENTS__";
 
 /**
  * 扩展全局类型声明,支持客户端缓存持久化
  */
 declare global {
-  var __CHECK_CX_OPENAI_CLIENTS__: Map<string, unknown> | undefined;
-  var __CHECK_CX_GEMINI_CLIENTS__: Map<string, unknown> | undefined;
-  var __CHECK_CX_ANTHROPIC_CLIENTS__: Map<string, unknown> | undefined;
+  var __KEYSPY_OPENAI_CLIENTS__: Map<string, unknown> | undefined;
+  var __KEYSPY_GEMINI_CLIENTS__: Map<string, unknown> | undefined;
+  var __KEYSPY_ANTHROPIC_CLIENTS__: Map<string, unknown> | undefined;
 }
 
 /**
@@ -33,7 +33,7 @@ declare global {
  * @example
  * ```typescript
  * // OpenAI Provider
- * const openAIClientCache = getOrCreateClientCache<OpenAI>("__CHECK_CX_OPENAI_CLIENTS__");
+ * const openAIClientCache = getOrCreateClientCache<OpenAI>("__KEYSPY_OPENAI_CLIENTS__");
  * const cacheKey = `${baseURL}::${apiKey}`;
  * let client = openAIClientCache.get(cacheKey);
  * if (!client) {

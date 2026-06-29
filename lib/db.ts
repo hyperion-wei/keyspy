@@ -167,31 +167,31 @@ export function initDb() {
             name: "OpenAI",
             type: "openai",
             base_url: "https://api.openai.com/v1/chat/completions",
-            models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            default_model: "gpt-4o-mini",
+            models: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini"],
+            default_model: "gpt-5.5",
             description: "OpenAI 官方接口",
           },
           {
             name: "MiniMax",
             type: "openai",
             base_url: "https://api.minimaxi.com/v1/chat/completions",
-            models: ["MiniMax-M2.7", "MiniMax-M1", "abab6.5s-chat", "abab5.5-chat"],
-            default_model: "MiniMax-M2.7",
+            models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1"],
+            default_model: "MiniMax-M3",
             description: "MiniMax OpenAI 兼容接口",
           },
           {
             name: "Anthropic",
             type: "anthropic",
             base_url: "https://api.anthropic.com/v1/messages",
-            models: ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"],
-            default_model: "claude-sonnet-4-20250514",
+            models: ["claude-opus-4-8-20260514", "claude-sonnet-4-6-20260414", "claude-3-5-haiku-20241022"],
+            default_model: "claude-sonnet-4-6-20260414",
             description: "Anthropic Claude 系列",
           },
           {
             name: "Gemini",
             type: "gemini",
             base_url: "https://generativelanguage.googleapis.com",
-            models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash-exp"],
+            models: ["gemini-3-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
             default_model: "gemini-2.5-flash",
             description: "Google Gemini 系列",
           },
@@ -199,9 +199,65 @@ export function initDb() {
             name: "DeepSeek",
             type: "openai",
             base_url: "https://api.deepseek.com/v1/chat/completions",
-            models: ["deepseek-chat", "deepseek-reasoner"],
+            models: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro"],
             default_model: "deepseek-chat",
             description: "DeepSeek OpenAI 兼容接口",
+          },
+          {
+            name: "Kimi",
+            type: "openai",
+            base_url: "https://api.moonshot.cn/v1/chat/completions",
+            models: ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"],
+            default_model: "kimi-k2.6",
+            description: "月之暗面 Kimi 通用系列",
+          },
+          {
+            name: "Kimi Coding",
+            type: "openai",
+            base_url: "https://api.moonshot.cn/v1/chat/completions",
+            models: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
+            default_model: "kimi-k2.7-code",
+            description: "月之暗面 Kimi Coding Plan 专用模型",
+          },
+          {
+            name: "智谱",
+            type: "openai",
+            base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            models: ["glm-5.2", "glm-5", "glm-4-plus", "glm-4-flash"],
+            default_model: "glm-5",
+            description: "智谱 GLM 系列",
+          },
+          {
+            name: "阿里百炼",
+            type: "openai",
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            models: ["qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash", "qwen-max", "qwen-plus"],
+            default_model: "qwen-max",
+            description: "阿里云通义千问 DashScope",
+          },
+          {
+            name: "腾讯混元",
+            type: "openai",
+            base_url: "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
+            models: ["hunyuan-turbos-latest", "hunyuan-turbos", "hunyuan-t1-latest", "hunyuan-lite"],
+            default_model: "hunyuan-turbos-latest",
+            description: "腾讯混元大模型 OpenAI 兼容接口",
+          },
+          {
+            name: "豆包",
+            type: "openai",
+            base_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            models: ["doubao-seed-2.0-pro-250615", "doubao-seed-2.0-lite-250615", "doubao-1.5-pro-32k-250115", "doubao-1.5-pro-256k-250115", "doubao-1.5-lite-32k-250115"],
+            default_model: "doubao-seed-2.0-pro-250615",
+            description: "字节跳动火山方舟豆包模型（需使用 endpoint_id）",
+          },
+          {
+            name: "硅基流动",
+            type: "openai",
+            base_url: "https://api.siliconflow.cn/v1/chat/completions",
+            models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-235B-A22B", "Qwen/Qwen3-32B", "THUDM/GLM-4.1V-9B-Thinking"],
+            default_model: "deepseek-ai/DeepSeek-V3",
+            description: "硅基流动 SiliconFlow 开源模型平台",
           },
         ];
         const insertMany = db.transaction((items: typeof builtIns) => {
@@ -216,6 +272,54 @@ export function initDb() {
       }
     } catch {
       // 多 worker 并发初始化时可能冲突，安全忽略
+    }
+
+    // 迁移：更新已有内置模板的模型列表 + 插入新增模板（v3: Kimi拆分 + 腾讯/豆包/硅基流动）
+    try {
+      // 确保 kv_store 表存在
+      db.exec(`CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)`);
+
+      const MIGRATION_KEY = "tpl_migration_v3";
+      const migrated = db.prepare("SELECT value FROM kv_store WHERE key = ?").get(MIGRATION_KEY);
+      if (!migrated) {
+        const upsertTpl = db.prepare(`
+          UPDATE monitor_templates
+          SET models = @models, default_model = @default_model, base_url = @base_url, description = @description, updated_at = datetime('now')
+          WHERE name = @name AND built_in = 1
+        `);
+        const insertTplIfNotExist = db.prepare(`
+          INSERT INTO monitor_templates (name, type, base_url, models, default_model, description, built_in)
+          SELECT @name, @type, @base_url, @models, @default_model, @description, 1
+          WHERE NOT EXISTS (SELECT 1 FROM monitor_templates WHERE name = @name AND built_in = 1)
+        `);
+
+        const updates: Array<{ name: string; base_url: string; models: string; default_model: string; description: string }> = [
+          { name: "OpenAI", base_url: "https://api.openai.com/v1/chat/completions", models: JSON.stringify(["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini"]), default_model: "gpt-5.5", description: "OpenAI 官方接口" },
+          { name: "MiniMax", base_url: "https://api.minimaxi.com/v1/chat/completions", models: JSON.stringify(["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1"]), default_model: "MiniMax-M3", description: "MiniMax OpenAI 兼容接口" },
+          { name: "Anthropic", base_url: "https://api.anthropic.com/v1/messages", models: JSON.stringify(["claude-opus-4-8-20260514", "claude-sonnet-4-6-20260414", "claude-3-5-haiku-20241022"]), default_model: "claude-sonnet-4-6-20260414", description: "Anthropic Claude 系列" },
+          { name: "Gemini", base_url: "https://generativelanguage.googleapis.com", models: JSON.stringify(["gemini-3-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"]), default_model: "gemini-2.5-flash", description: "Google Gemini 系列" },
+          { name: "DeepSeek", base_url: "https://api.deepseek.com/v1/chat/completions", models: JSON.stringify(["deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro"]), default_model: "deepseek-chat", description: "DeepSeek OpenAI 兼容接口" },
+          { name: "Kimi", base_url: "https://api.moonshot.cn/v1/chat/completions", models: JSON.stringify(["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"]), default_model: "kimi-k2.6", description: "月之暗面 Kimi 通用系列" },
+          { name: "智谱", base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions", models: JSON.stringify(["glm-5.2", "glm-5", "glm-4-plus", "glm-4-flash"]), default_model: "glm-5", description: "智谱 GLM 系列" },
+          { name: "阿里百炼", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", models: JSON.stringify(["qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash", "qwen-max", "qwen-plus"]), default_model: "qwen-max", description: "阿里云通义千问 DashScope" },
+        ];
+
+        const inserts: Array<{ name: string; type: string; base_url: string; models: string; default_model: string; description: string }> = [
+          { name: "Kimi Coding", type: "openai", base_url: "https://api.moonshot.cn/v1/chat/completions", models: JSON.stringify(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"]), default_model: "kimi-k2.7-code", description: "月之暗面 Kimi Coding Plan 专用模型" },
+          { name: "腾讯混元", type: "openai", base_url: "https://api.hunyuan.cloud.tencent.com/v1/chat/completions", models: JSON.stringify(["hunyuan-turbos-latest", "hunyuan-turbos", "hunyuan-t1-latest", "hunyuan-lite"]), default_model: "hunyuan-turbos-latest", description: "腾讯混元大模型 OpenAI 兼容接口" },
+          { name: "豆包", type: "openai", base_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", models: JSON.stringify(["doubao-seed-2.0-pro-250615", "doubao-seed-2.0-lite-250615", "doubao-1.5-pro-32k-250115", "doubao-1.5-pro-256k-250115", "doubao-1.5-lite-32k-250115"]), default_model: "doubao-seed-2.0-pro-250615", description: "字节跳动火山方舟豆包模型（需使用 endpoint_id）" },
+          { name: "硅基流动", type: "openai", base_url: "https://api.siliconflow.cn/v1/chat/completions", models: JSON.stringify(["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-235B-A22B", "Qwen/Qwen3-32B", "THUDM/GLM-4.1V-9B-Thinking"]), default_model: "deepseek-ai/DeepSeek-V3", description: "硅基流动 SiliconFlow 开源模型平台" },
+        ];
+
+        const migrateAll = db.transaction(() => {
+          for (const u of updates) upsertTpl.run(u);
+          for (const ins of inserts) insertTplIfNotExist.run(ins);
+          db.prepare("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)").run(MIGRATION_KEY, new Date().toISOString());
+        });
+        migrateAll();
+      }
+    } catch {
+      // 迁移失败不阻塞启动
     }
 
     // 创建默认管理员账户（仅首次初始化时，多 worker 安全）
@@ -259,7 +363,7 @@ function bootstrapPoller(): void {
     try {
       startPoller();
     } catch (error) {
-      console.error("[check-cx-ui] 启动后台轮询器失败", error);
+      console.error("[keyspy] 启动后台轮询器失败", error);
     }
   });
 }
@@ -277,7 +381,7 @@ if (
     try {
       initDb();
     } catch (error) {
-      console.error("[check-cx-ui] 自动初始化数据库失败", error);
+      console.error("[keyspy] 自动初始化数据库失败", error);
     }
   });
 }
@@ -478,6 +582,12 @@ export function getAllMonitorConfigs(): MonitorConfig[] {
 
 export function getMonitorConfigById(id: number): MonitorConfig | undefined {
   return getDb().prepare("SELECT * FROM monitor_configs WHERE id = ?").get(id) as MonitorConfig | undefined;
+}
+
+export function findMonitorConfigsByKey(apiKey: string): MonitorConfig[] {
+  return getDb()
+    .prepare("SELECT * FROM monitor_configs WHERE api_key = ? ORDER BY created_at DESC")
+    .all(apiKey) as MonitorConfig[];
 }
 
 export function createMonitorConfig(input: MonitorConfigInput): MonitorConfig {
