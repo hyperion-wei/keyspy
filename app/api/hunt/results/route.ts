@@ -2,11 +2,13 @@ import {
   initDb,
   getAllHuntFindings,
   getHuntFindingsCount,
+  getHuntFindingById,
   updateHuntFindingMonitorStatus,
   updateHuntFinding,
   deleteHuntFinding,
   createMonitorConfig,
   findMonitorConfigsByKey,
+  deleteMonitorConfig,
   getAllTemplates,
   type MonitorTemplateParsed,
   HuntFinding,
@@ -230,13 +232,13 @@ export async function POST(request: Request) {
     });
   }
 
-  // 2. 匹配内置模板
-  const tpl = matchTemplate(body.provider);
+  // 2. 前端已通过测试确定正确的 type/base_url/model，直接使用
+  //    仅当 base_url 为空时才 fallback 按 provider 匹配内置模板
+  const tpl = base_url ? null : matchTemplate(body.provider);
 
-  // 3. 优先使用模板设置
-  const finalType = tpl?.type || type || "openai";
+  const finalType = type || tpl?.type || "openai";
   const finalBaseUrl = tpl ? tpl.base_url : normalizeBaseUrl(base_url || "");
-  const finalModel = tpl ? tpl.default_model : model;
+  const finalModel = tpl ? tpl.default_model : (model || "gpt-3.5-turbo");
   const fallbackModels = tpl ? JSON.stringify(tpl.models.filter((m) => m !== tpl.default_model)) : "[]";
 
   try {
@@ -320,7 +322,19 @@ export async function DELETE(request: Request) {
     return Response.json({ success: ok });
   }
 
-  // 默认：从监控中移除
-  updateHuntFindingMonitorStatus(Number(findingId), false);
-  return Response.json({ success: true });
+  // 默认：从监控中移除（同时删除对应的监控配置）
+  const fid = Number(findingId);
+  const finding = getHuntFindingById(fid);
+  let deletedConfigs = 0;
+  if (finding?.key_value) {
+    const configs = findMonitorConfigsByKey(finding.key_value);
+    for (const c of configs) {
+      if (c.group_name === "Hunt 发现") {
+        deleteMonitorConfig(c.id);
+        deletedConfigs++;
+      }
+    }
+  }
+  updateHuntFindingMonitorStatus(fid, false);
+  return Response.json({ success: true, deletedConfigs });
 }

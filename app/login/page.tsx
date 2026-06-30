@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { LogIn, UserPlus, Eye, EyeOff, Activity, ArrowLeft } from "lucide-react";
+import { LogIn, Eye, EyeOff, Activity, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface User {
@@ -23,7 +23,6 @@ function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectUrl = searchParams.get("redirect") || "/";
-  const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -52,7 +51,7 @@ function LoginPageContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: isLogin ? "login" : "register",
+          action: "login",
           username,
           password,
         }),
@@ -61,14 +60,14 @@ function LoginPageContent() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || "操作失败");
+        setError(data.error || "login failed");
         return;
       }
 
       router.push(redirectUrl);
       router.refresh();
     } catch {
-      setError("网络错误，请稍后重试");
+      setError("network error");
     } finally {
       setLoading(false);
     }
@@ -88,7 +87,7 @@ function LoginPageContent() {
             <Activity className="h-8 w-8" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
-            欢迎回来
+            Welcome
           </h1>
           <p className="text-lg text-muted-foreground">
             {currentUser.username}
@@ -99,13 +98,13 @@ function LoginPageContent() {
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-3 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
             >
               <ArrowLeft className="h-4 w-4" />
-              进入首页
+              Go to Dashboard
             </Link>
             <button
               onClick={handleLogout}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-border/60 bg-background/50 px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-background/80"
             >
-              退出登录
+              Logout
             </button>
           </div>
         </div>
@@ -124,7 +123,7 @@ function LoginPageContent() {
             KeySpy
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {isLogin ? "登录到您的账户" : "创建新账户"}
+            Sign in to your account
           </p>
         </div>
 
@@ -138,13 +137,13 @@ function LoginPageContent() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                用户名
+                Username
               </label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="请输入用户名"
+                placeholder="Enter username"
                 className="w-full rounded-xl border border-border/60 bg-background/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
                 required
               />
@@ -152,14 +151,14 @@ function LoginPageContent() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                密码
+                Password
               </label>
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="请输入密码"
+                  placeholder="Enter password"
                   className="w-full rounded-xl border border-border/60 bg-background/50 px-4 py-3 pr-12 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
                   required
                 />
@@ -187,32 +186,14 @@ function LoginPageContent() {
             >
               {loading ? (
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
-              ) : isLogin ? (
-                <>
-                  <LogIn className="h-4 w-4" />
-                  登录
-                </>
               ) : (
                 <>
-                  <UserPlus className="h-4 w-4" />
-                  注册
+                  <LogIn className="h-4 w-4" />
+                  Sign In
                 </>
               )}
             </button>
           </form>
-
-          <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setError("");
-              }}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {isLogin ? "没有账户？立即注册" : "已有账户？立即登录"}
-            </button>
-          </div>
         </div>
 
         <div className="text-center">
@@ -220,7 +201,7 @@ function LoginPageContent() {
             href="/"
             className="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            返回首页
+            Back to Home
           </Link>
         </div>
       </div>

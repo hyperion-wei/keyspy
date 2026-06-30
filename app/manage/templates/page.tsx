@@ -216,6 +216,12 @@ function TemplatesContent() {
             <h1 className="text-lg font-semibold">模板管理</h1>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/manage/accounts"
+              className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              账户管理
+            </Link>
             <button
               onClick={openCreate}
               className="flex items-center gap-2 rounded-xl bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90"

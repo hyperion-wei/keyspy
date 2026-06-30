@@ -1,5 +1,6 @@
-import { initDb, getAllHuntTasks, getHuntTaskById, getHuntFindingsByTaskId, deleteHuntTask } from "@/lib/db";
+import { initDb, getAllHuntTasks, getHuntTaskById, getHuntFindingsByTaskId, deleteHuntTask, updateHuntTask } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
+import { abortTask } from "@/lib/hunt-registry";
 
 initDb();
 
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
 
 /**
  * DELETE /api/hunt/tasks?id=xxx
- * 删除扫描任务（含关联 findings）
+ * 删除扫描任务（含关联 findings），支持中断正在运行的任务
  */
 export async function DELETE(request: Request) {
   const user = await getAuthUser();
@@ -51,7 +52,12 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    deleteHuntTask(Number(taskId));
+    // 先中断运行中的任务
+    const id = Number(taskId);
+    abortTask(id);
+    updateHuntTask(id, { status: "failed", error: "用户手动删除" });
+    // 然后删除数据库记录
+    deleteHuntTask(id);
     return Response.json({ success: true });
   } catch (err) {
     return Response.json(

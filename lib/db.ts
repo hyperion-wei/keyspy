@@ -153,6 +153,8 @@ export function initDb() {
     addColumnSafely("monitor_configs", "active_model TEXT DEFAULT ''");
     addColumnSafely("hunt_findings", "analysis TEXT DEFAULT ''");
     addColumnSafely("hunt_findings", "source_urls TEXT DEFAULT '[]'");
+    addColumnSafely("hunt_tasks", "progress TEXT DEFAULT '{}'");
+    addColumnSafely("users", "role TEXT DEFAULT 'user'");
 
     // 初始化内置模板（仅在首次时插入）
     try {
@@ -327,7 +329,10 @@ export function initDb() {
       const existing = db.prepare("SELECT id FROM users WHERE username = ?").get("admin");
       if (!existing) {
         const hash = hashSync("admin123", 10);
-        db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").run("admin", hash);
+        db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)").run("admin", hash, "admin");
+      } else {
+        // 修复：确保已存在的 admin 用户拥有正确的角色（兼容旧数据库迁移）
+        db.prepare("UPDATE users SET role = 'admin' WHERE username = 'admin' AND (role IS NULL OR role != 'admin')").run();
       }
     } catch {
       // 多 worker 并发初始化时可能遇到 UNIQUE 冲突，安全忽略
@@ -391,29 +396,60 @@ if (
 export interface User {
   id: number;
   username: string;
+  role: string;
   created_at: string;
 }
 
-export function createUser(username: string, password: string): User {
+export function createUser(username: string, password: string, role: string = "user"): User {
   const hash = hashSync(password, 10);
   const stmt = getDb().prepare(
-    "INSERT INTO users (username, password_hash) VALUES (?, ?) RETURNING id, username, created_at"
+    "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) RETURNING id, username, role, created_at"
   );
-  return stmt.get(username, hash) as User;
+  return stmt.get(username, hash, role) as User;
 }
 
-export function findUserByUsername(username: string): { id: number; username: string; password_hash: string } | undefined {
-  const stmt = getDb().prepare("SELECT id, username, password_hash FROM users WHERE username = ?");
-  return stmt.get(username) as { id: number; username: string; password_hash: string } | undefined;
+export function findUserByUsername(username: string): { id: number; username: string; password_hash: string; role: string } | undefined {
+  const stmt = getDb().prepare("SELECT id, username, password_hash, role FROM users WHERE username = ?");
+  return stmt.get(username) as { id: number; username: string; password_hash: string; role: string } | undefined;
 }
 
-export function findUserById(id: number): { id: number; username: string } | undefined {
-  const stmt = getDb().prepare("SELECT id, username FROM users WHERE id = ?");
-  return stmt.get(id) as { id: number; username: string } | undefined;
+export function findUserById(id: number): { id: number; username: string; role: string } | undefined {
+  const stmt = getDb().prepare("SELECT id, username, role FROM users WHERE id = ?");
+  return stmt.get(id) as { id: number; username: string; role: string } | undefined;
 }
 
 export function verifyPassword(password: string, hash: string): boolean {
   return compareSync(password, hash);
+}
+
+/** 获取所有用户列表（管理用） */
+export function getAllUsers(): User[] {
+  return getDb().prepare("SELECT id, username, role, created_at FROM users ORDER BY id").all() as User[];
+}
+
+/** 删除用户（同时级联删除 sessions） */
+export function deleteUser(id: number): boolean {
+  const info = getDb().prepare("DELETE FROM users WHERE id = ?").run(id);
+  return info.changes > 0;
+}
+
+/** 修改用户密码 */
+export function changeUserPassword(id: number, newPassword: string): boolean {
+  const hash = hashSync(newPassword, 10);
+  const info = getDb().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, id);
+  return info.changes > 0;
+}
+
+/** 修改用户角色 */
+export function updateUserRole(id: number, role: string): boolean {
+  const info = getDb().prepare("UPDATE users SET role = ? WHERE id = ?").run(role, id);
+  return info.changes > 0;
+}
+
+/** 修改用户名 */
+export function updateUsername(id: number, newUsername: string): boolean {
+  const info = getDb().prepare("UPDATE users SET username = ? WHERE id = ?").run(newUsername, id);
+  return info.changes > 0;
 }
 
 // ============ Sessions ============
@@ -842,6 +878,7 @@ export interface HuntTask {
   completed: number;
   findings_count: number;
   error: string | null;
+  progress: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -870,10 +907,10 @@ export function createHuntTask(total: number): HuntTask {
   return getDb().prepare("SELECT * FROM hunt_tasks WHERE id = ?").get(info.lastInsertRowid) as HuntTask;
 }
 
-export function updateHuntTask(id: number, updates: Partial<Pick<HuntTask, 'status' | 'completed' | 'findings_count' | 'error'>>): void {
+export function updateHuntTask(id: number, updates: Partial<Pick<HuntTask, 'status' | 'completed' | 'findings_count' | 'error' | 'progress'>>): void {
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };
-  for (const key of ['status', 'completed', 'findings_count', 'error'] as const) {
+  for (const key of ['status', 'completed', 'findings_count', 'error', 'progress'] as const) {
     if (updates[key] !== undefined) {
       fields.push(`${key} = @${key}`);
       values[key] = updates[key];
@@ -914,6 +951,10 @@ export function getAllHuntFindings(limit = 100, offset = 0): HuntFinding[] {
 export function getHuntFindingsCount(): number {
   const result = getDb().prepare("SELECT COUNT(*) as cnt FROM hunt_findings").get() as { cnt: number };
   return result.cnt;
+}
+
+export function getHuntFindingById(id: number): HuntFinding | undefined {
+  return getDb().prepare("SELECT * FROM hunt_findings WHERE id = ?").get(id) as HuntFinding | undefined;
 }
 
 export function updateHuntFindingMonitorStatus(id: number, added: boolean): void {

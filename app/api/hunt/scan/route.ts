@@ -16,6 +16,7 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { registerTask, unregisterTask, abortTask, activeTasks } from "@/lib/hunt-registry";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,6 +92,18 @@ const MAX_DEPTH = 3;
 const MAX_FILES = 300;
 const FETCH_TIMEOUT = 8000;
 const MAX_CONTENT_SIZE = 200000;
+const MAX_CONCURRENCY = 3; // 最大并发数
+
+// ====== 进度跟踪类型 ======
+interface TargetProgress {
+  url: string;
+  phase: 'downloading' | 'scanning' | 'classifying' | 'done' | 'error';
+  filesDownloaded: number;
+  dirsScanned: number;
+  rawFindings: number;
+  llmFindings: number;
+  error?: string;
+}
 
 const SENSITIVE_FILES = new Set([
   ".env", ".env.local", ".env.production", ".env.development",
@@ -183,6 +196,8 @@ interface CrawlStats {
   filesSkipped: number;
 }
 
+// ====== 任务中断注册表 (使用 lib/hunt-registry) ======
+
 // ====== API Endpoint ======
 
 export async function POST(request: Request) {
@@ -208,97 +223,263 @@ export async function POST(request: Request) {
   }
 
   const task = createHuntTask(targets.length);
+  registerTask(task.id);
   runScan(task.id, targets as ScanTarget[]).catch((err) => {
     console.error(`[hunt/scan] Task ${task.id} failed:`, err);
     updateHuntTask(task.id, { status: "failed", error: err instanceof Error ? err.message : String(err) });
+  }).finally(() => {
+    unregisterTask(task.id);
   });
 
   return Response.json({ success: true, taskId: task.id, message: `扫描任务已启动，共 ${targets.length} 个目标` });
 }
 
-// ====== 扫描主流程 ======
+/**
+ * PUT /api/hunt/scan
+ * 暂停/中断扫描任务
+ */
+export async function PUT(request: Request) {
+  const user = await getAuthUser();
+  if (!user) return Response.json({ error: "未授权" }, { status: 401 });
+
+  const body = await request.json();
+  const { taskId, action } = body;
+
+  if (!taskId) {
+    return Response.json({ error: "缺少 taskId" }, { status: 400 });
+  }
+
+  if (action === "abort") {
+    const wasRunning = abortTask(Number(taskId));
+    if (wasRunning) {
+      updateHuntTask(Number(taskId), { status: "failed", error: "用户手动中断" });
+      return Response.json({ success: true, message: "任务已中断" });
+    }
+    // 不在活跃任务中，直接标记
+    updateHuntTask(Number(taskId), { status: "failed", error: "用户手动中断" });
+    return Response.json({ success: true, message: "任务已标记为中断" });
+  }
+
+  return Response.json({ error: "未知 action" }, { status: 400 });
+}
+
+// ====== 扫描主流程（多并发）======
 
 async function runScan(taskId: number, targets: ScanTarget[]) {
   const tempDir = createTempDir();
+  console.log(`[hunt/scan] Task #${taskId} 启动，共 ${targets.length} 个目标，并发数: ${MAX_CONCURRENCY}`);
   console.log(`[hunt/scan] 临时目录: ${tempDir}`);
 
-  try {
-    let completed = 0;
-    const allClassified: Array<{
-      finding: RawFinding;
-      classified: { is_llm_related: boolean; finding_type?: string; provider?: string; model?: string | null; base_url?: string | null; confidence?: string };
-    }> = [];
+  const ctrl = activeTasks.get(taskId);
+  if (!ctrl) return;
 
-    for (const target of targets) {
-      const baseUrl = `${target.protocol}://${target.host}:${target.port}`;
-      const targetTempDir = path.join(tempDir, `${target.host}_${target.port}`);
+  // 检查是否被中断
+  function isAborted(): boolean {
+    return ctrl!.aborted;
+  }
 
-      try {
-        console.log(`[hunt/scan] Task #${taskId} 开始扫描: ${baseUrl}`);
+  // 进度状态
+  const progressMap = new Map<string, TargetProgress>();
+  const completedCount = { value: 0 };
+  let totalFindings = 0;
 
-        // Step 1: 下载文件
-        const stats: CrawlStats = { filesScanned: 0, dirsScanned: 0, filesSkipped: 0 };
-        const fileUrlMap = new Map<string, string>();
-        await crawlAndDownload(baseUrl, baseUrl, 0, new Set(), stats, targetTempDir, fileUrlMap);
-        console.log(`[hunt/scan] 下载完成: 文件=${stats.filesScanned}, 目录=${stats.dirsScanned}`);
+  // 更新进度的辅助函数
+  function updateProgress() {
+    const progressObj: Record<string, TargetProgress> = {};
+    for (const [url, p] of progressMap) {
+      progressObj[url] = p;
+    }
+    updateHuntTask(taskId, {
+      completed: completedCount.value,
+      progress: JSON.stringify(progressObj),
+    });
+  }
 
-        if (stats.filesScanned === 0) {
-          completed++;
-          updateHuntTask(taskId, { completed });
-          continue;
-        }
+  // 初始化所有目标的进度
+  for (const target of targets) {
+    const baseUrl = `${target.protocol}://${target.host}:${target.port}`;
+    progressMap.set(baseUrl, {
+      url: baseUrl,
+      phase: 'downloading',
+      filesDownloaded: 0,
+      dirsScanned: 0,
+      rawFindings: 0,
+      llmFindings: 0,
+    });
+  }
+  updateProgress();
 
-        // Step 2: gitleaks 扫描（默认规则 + 增强规则）
-        const defaultResults = await runGitleaks(targetTempDir);
-        const enhancedResults = await runGitleaks(targetTempDir, GITLEAKS_ENHANCED_RULES || undefined);
-        console.log(`[hunt/scan] gitleaks: 默认=${defaultResults.length}, 增强=${enhancedResults.length}`);
+  // 并发池
+  const processTarget = async (target: ScanTarget): Promise<void> => {
+    if (isAborted()) return;
+    const baseUrl = `${target.protocol}://${target.host}:${target.port}`;
+    const targetTempDir = path.join(tempDir, `${target.host}_${target.port}`);
+    const progress = progressMap.get(baseUrl)!;
 
-        // Step 3: 合并过滤
-        const merged = mergeAndFilterReports(defaultResults, enhancedResults);
+    try {
+      console.log(`[hunt/scan] Task #${taskId} 开始处理: ${baseUrl}`);
 
-        // Step 4: 映射 + 分类
-        const findings = mapToFindings(merged, targetTempDir, baseUrl, fileUrlMap);
-        for (const finding of findings) {
-          const classified = await classifyFinding(finding);
-          if (classified.is_llm_related) allClassified.push({ finding, classified });
-        }
+      // === Phase 1: 下载 ===
+      progress.phase = 'downloading';
+      updateProgress();
 
-        completed++;
-        updateHuntTask(taskId, { completed });
-      } catch (err) {
-        console.warn(`[hunt/scan] Failed: ${target.url}:`, err);
-        completed++;
-        updateHuntTask(taskId, { completed });
+      const stats: CrawlStats = { filesScanned: 0, dirsScanned: 0, filesSkipped: 0 };
+      const fileUrlMap = new Map<string, string>();
+      await crawlAndDownload(baseUrl, baseUrl, 0, new Set(), stats, targetTempDir, fileUrlMap);
+
+      if (isAborted()) {
+        progress.phase = 'error';
+        progress.error = '任务已中断';
+        completedCount.value++;
+        updateProgress();
+        return;
       }
+
+      progress.filesDownloaded = stats.filesScanned;
+      progress.dirsScanned = stats.dirsScanned;
+      console.log(`[hunt/scan] ${baseUrl} 下载完成: 文件=${stats.filesScanned}, 目录=${stats.dirsScanned}`);
+      updateProgress();
+
+      if (stats.filesScanned === 0) {
+        progress.phase = 'done';
+        completedCount.value++;
+        updateProgress();
+        return;
+      }
+
+      // === Phase 2: Gitleaks 扫描 ===
+      progress.phase = 'scanning';
+      updateProgress();
+
+      const defaultResults = await runGitleaks(targetTempDir);
+      if (isAborted()) {
+        progress.phase = 'error';
+        progress.error = '任务已中断';
+        completedCount.value++;
+        updateProgress();
+        return;
+      }
+
+      const enhancedResults = await runGitleaks(targetTempDir, GITLEAKS_ENHANCED_RULES || undefined);
+      if (isAborted()) {
+        progress.phase = 'error';
+        progress.error = '任务已中断';
+        completedCount.value++;
+        updateProgress();
+        return;
+      }
+
+      const merged = mergeAndFilterReports(defaultResults, enhancedResults);
+
+      progress.rawFindings = merged.length;
+      console.log(`[hunt/scan] ${baseUrl} gitleaks: 默认=${defaultResults.length}, 增强=${enhancedResults.length}, 合并=${merged.length}`);
+      updateProgress();
+
+      // === Phase 3: 分类 + 聚合 + 存储 ===
+      progress.phase = 'classifying';
+      updateProgress();
+
+      const findings = mapToFindings(merged, targetTempDir, baseUrl, fileUrlMap);
+
+      // 分类并存储每个 finding
+      const classified: Array<{
+        finding: RawFinding;
+        classified: { is_llm_related: boolean; finding_type?: string; provider?: string; model?: string | null; base_url?: string | null; confidence?: string };
+      }> = [];
+
+      for (const finding of findings) {
+        if (isAborted()) break;
+        const cls = await classifyFinding(finding);
+        if (cls.is_llm_related) {
+          classified.push({ finding, classified: cls });
+        }
+      }
+
+      if (isAborted()) {
+        progress.phase = 'error';
+        progress.error = '任务已中断';
+        completedCount.value++;
+        updateProgress();
+        return;
+      }
+
+      // 同文件聚合
+      aggregateSameFileFindings(classified);
+
+      // 去重
+      const deduped = deduplicateByKey(classified);
+
+      // AI 分析
+      const analyzed = await analyzeFindings(deduped);
+
+      if (isAborted()) {
+        progress.phase = 'error';
+        progress.error = '任务已中断';
+        completedCount.value++;
+        updateProgress();
+        return;
+      }
+
+      // 存储到数据库
+      let targetFindings = 0;
+      for (const item of analyzed) {
+        const cleanKey = item.finding.matchedValue ? sanitizeKey(item.finding.matchedValue).slice(0, 200) : '';
+        createHuntFinding({
+          task_id: taskId,
+          target_url: item.target_url,
+          finding_type: item.classified.finding_type || item.finding.type,
+          raw_content: item.finding.content.slice(0, 500),
+          key_value: cleanKey,
+          provider: item.classified.provider || item.finding.provider,
+          model: item.classified.model || null,
+          base_url: item.classified.base_url || null,
+          confidence: item.classified.confidence || "medium",
+          added_to_monitor: 0,
+          analysis: item.analysis || '',
+          source_urls: JSON.stringify(item.sourceUrls || []),
+        });
+        targetFindings++;
+      }
+
+      progress.llmFindings = targetFindings;
+      totalFindings += targetFindings;
+      progress.phase = 'done';
+      completedCount.value++;
+      updateProgress();
+
+      console.log(`[hunt/scan] ${baseUrl} 完成: ${targetFindings} 个发现`);
+    } catch (err) {
+      if (isAborted()) return;
+      console.warn(`[hunt/scan] ${baseUrl} 失败:`, err);
+      progress.phase = 'error';
+      progress.error = err instanceof Error ? err.message : String(err);
+      completedCount.value++;
+      updateProgress();
     }
+  };
 
-    // Step 5-8: 聚合 → 去重 → AI分析 → 存储
-    aggregateSameFileFindings(allClassified);
-    const deduped = deduplicateByKey(allClassified);
-    const analyzed = await analyzeFindings(deduped);
+  // 并发执行
+  try {
+    const workers = Array.from({ length: Math.min(MAX_CONCURRENCY, targets.length) }, async (_, workerIdx) => {
+      for (let i = workerIdx; i < targets.length; i += MAX_CONCURRENCY) {
+        if (isAborted()) return;
+        await processTarget(targets[i]);
+      }
+    });
+    await Promise.all(workers);
 
-    let findingsCount = 0;
-    for (const item of analyzed) {
-      const cleanKey = item.finding.matchedValue ? sanitizeKey(item.finding.matchedValue).slice(0, 200) : '';
-      createHuntFinding({
-        task_id: taskId,
-        target_url: item.target_url,
-        finding_type: item.classified.finding_type || item.finding.type,
-        raw_content: item.finding.content.slice(0, 500),
-        key_value: cleanKey,
-        provider: item.classified.provider || item.finding.provider,
-        model: item.classified.model || null,
-        base_url: item.classified.base_url || null,
-        confidence: item.classified.confidence || "medium",
-        added_to_monitor: 0,
-        analysis: item.analysis || '',
-        source_urls: JSON.stringify(item.sourceUrls || []),
+    // 最终状态
+    if (isAborted()) {
+      console.log(`[hunt/scan] Task #${taskId} 已中断`);
+    } else {
+      updateHuntTask(taskId, {
+        status: "completed",
+        completed: targets.length,
+        findings_count: totalFindings,
+        progress: JSON.stringify(Object.fromEntries(progressMap)),
       });
-      findingsCount++;
+      console.log(`[hunt/scan] Task #${taskId} 全部完成: ${totalFindings} 个发现`);
     }
-
-    updateHuntTask(taskId, { status: "completed", completed, findings_count: findingsCount });
-    console.log(`[hunt/scan] Task #${taskId} 完成: ${findingsCount} 发现 (去重前: ${allClassified.length})`);
   } finally {
     cleanupTempDir(tempDir);
   }

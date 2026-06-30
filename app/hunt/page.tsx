@@ -11,6 +11,7 @@ import {
   FileSearch,
   ArrowLeft,
   Play,
+  Pause,
   CheckSquare,
   Square,
   Loader2,
@@ -29,6 +30,7 @@ import {
   X,
   ChevronDown,
   Zap,
+  StopCircle,
 } from "lucide-react";
 
 // ===== 类型定义 =====
@@ -50,7 +52,18 @@ interface HuntTask {
   completed: number;
   findings_count: number;
   error: string | null;
+  progress: string | null;
   created_at: string;
+}
+
+interface TargetProgress {
+  url: string;
+  phase: 'downloading' | 'scanning' | 'classifying' | 'done' | 'error';
+  filesDownloaded: number;
+  dirsScanned: number;
+  rawFindings: number;
+  llmFindings: number;
+  error?: string;
 }
 
 interface HuntFinding {
@@ -611,11 +624,45 @@ function TargetAcquisitionTab({ onScanStarted }: { onScanStarted: () => void }) 
 
 // ===== 任务进度 Tab =====
 
+function getPhaseLabel(phase: string): string {
+  switch (phase) {
+    case 'downloading': return '下载中';
+    case 'scanning': return '扫描中';
+    case 'classifying': return '分析中';
+    case 'done': return '完成';
+    case 'error': return '错误';
+    default: return phase;
+  }
+}
+
+function getPhaseColor(phase: string): string {
+  switch (phase) {
+    case 'downloading': return 'text-blue-500';
+    case 'scanning': return 'text-yellow-500';
+    case 'classifying': return 'text-purple-500';
+    case 'done': return 'text-green-500';
+    case 'error': return 'text-red-500';
+    default: return 'text-muted-foreground';
+  }
+}
+
+function getPhaseBg(phase: string): string {
+  switch (phase) {
+    case 'downloading': return 'bg-blue-500/10';
+    case 'scanning': return 'bg-yellow-500/10';
+    case 'classifying': return 'bg-purple-500/10';
+    case 'done': return 'bg-green-500/10';
+    case 'error': return 'bg-red-500/10';
+    default: return 'bg-muted';
+  }
+}
+
 function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
   const [tasks, setTasks] = useState<HuntTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
+  const [abortingId, setAbortingId] = useState<number | null>(null);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -632,9 +679,28 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
 
   useEffect(() => {
     fetchTasks();
-    const interval = setInterval(fetchTasks, 3000); // 自动刷新
+    const interval = setInterval(fetchTasks, 2000); // 2秒自动刷新
     return () => clearInterval(interval);
   }, [fetchTasks]);
+
+  async function handleAbortTask(taskId: number) {
+    setAbortingId(taskId);
+    try {
+      const res = await fetch("/api/hunt/scan", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, action: "abort" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchTasks();
+      }
+    } catch (err) {
+      alert(`中断失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAbortingId(null);
+    }
+  }
 
   async function handleDeleteTask(taskId: number) {
     if (!confirm(`确定删除任务 #${taskId} 及其所有发现？`)) return;
@@ -723,12 +789,29 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
         const isCompleted = task.status === "completed";
         const isFailed = task.status === "failed";
 
+        // 解析详细进度
+        let targetProgressList: TargetProgress[] = [];
+        try {
+          const progressObj = task.progress ? JSON.parse(task.progress) : {};
+          targetProgressList = Object.values(progressObj);
+        } catch { /* ignore */ }
+
+        // 统计各阶段数量
+        const phaseStats = {
+          downloading: targetProgressList.filter(p => p.phase === 'downloading').length,
+          scanning: targetProgressList.filter(p => p.phase === 'scanning').length,
+          classifying: targetProgressList.filter(p => p.phase === 'classifying').length,
+          done: targetProgressList.filter(p => p.phase === 'done').length,
+          error: targetProgressList.filter(p => p.phase === 'error').length,
+        };
+
         return (
           <div
             key={task.id}
             className="rounded-xl border border-border/40 bg-card p-4"
           >
-            <div className="flex items-center justify-between mb-2">
+            {/* 任务头部 */}
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <span
                   className={cn(
@@ -745,6 +828,7 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
                 <div>
                   <p className="text-sm font-medium">
                     任务 #{task.id}
+                    {isRunning && <span className="ml-2 text-xs text-blue-500 animate-pulse">并发扫描中...</span>}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {new Date(task.created_at).toLocaleString()}
@@ -752,34 +836,89 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-sm font-medium">
-                  {task.findings_count} 个发现
+                <p className="text-sm font-semibold">
+                  <span className="text-primary">{task.findings_count}</span> 个发现
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {task.completed}/{task.total} 目标
+                  {task.completed}/{task.total} 完成
                 </p>
               </div>
             </div>
 
-            {/* 进度条 */}
-            <div className="h-2 rounded-full bg-muted overflow-hidden">
+            {/* 阶段统计条 */}
+            {isRunning && targetProgressList.length > 0 && (
+              <div className="mb-3 flex gap-1.5 flex-wrap">
+                {phaseStats.downloading > 0 && (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", getPhaseBg('downloading'), getPhaseColor('downloading'))}>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    下载 {phaseStats.downloading}
+                  </span>
+                )}
+                {phaseStats.scanning > 0 && (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", getPhaseBg('scanning'), getPhaseColor('scanning'))}>
+                    <Search className="h-3 w-3" />
+                    扫描 {phaseStats.scanning}
+                  </span>
+                )}
+                {phaseStats.classifying > 0 && (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", getPhaseBg('classifying'), getPhaseColor('classifying'))}>
+                    <Sparkles className="h-3 w-3" />
+                    分析 {phaseStats.classifying}
+                  </span>
+                )}
+                {phaseStats.done > 0 && (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", getPhaseBg('done'), getPhaseColor('done'))}>
+                    <Check className="h-3 w-3" />
+                    完成 {phaseStats.done}
+                  </span>
+                )}
+                {phaseStats.error > 0 && (
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", getPhaseBg('error'), getPhaseColor('error'))}>
+                    <AlertCircle className="h-3 w-3" />
+                    错误 {phaseStats.error}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* 总进度条 */}
+            <div className="h-2.5 rounded-full bg-muted overflow-hidden mb-2">
               <div
                 className={cn(
                   "h-full transition-all duration-500",
-                  isFailed ? "bg-red-500" : isCompleted ? "bg-green-500" : "bg-blue-500"
+                  isFailed ? "bg-red-500" : isCompleted ? "bg-green-500" : "bg-gradient-to-r from-blue-500 to-indigo-500"
                 )}
                 style={{ width: `${progress}%` }}
               />
             </div>
 
-            {/* 状态信息 */}
-            <div className="mt-2 flex items-center justify-between text-xs">
+            {/* 进度百分比 + 操作按钮 */}
+            <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">
-                {isRunning && `扫描中 ${progress}%`}
+                {isRunning && `${progress}%`}
                 {isCompleted && "扫描完成"}
-                {isFailed && `失败: ${task.error?.slice(0, 50)}...`}
+                {isFailed && `失败: ${task.error?.slice(0, 60)}...`}
               </span>
               <div className="flex items-center gap-2">
+                {/* 运行中：显示中断按钮 */}
+                {isRunning && (
+                  <button
+                    onClick={() => handleAbortTask(task.id)}
+                    disabled={abortingId === task.id}
+                    className={cn(
+                      "flex items-center gap-1 rounded-md border border-orange-500/30 px-2 py-1 text-orange-500 transition-colors hover:bg-orange-500/10",
+                      "disabled:cursor-not-allowed disabled:opacity-50"
+                    )}
+                    title="中断任务"
+                  >
+                    {abortingId === task.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <StopCircle className="h-3 w-3" />
+                    )}
+                    中断
+                  </button>
+                )}
                 {isCompleted && task.findings_count > 0 && (
                   <button
                     onClick={onViewResults}
@@ -789,22 +928,56 @@ function TaskProgressTab({ onViewResults }: { onViewResults: () => void }) {
                     <ExternalLink className="h-3 w-3" />
                   </button>
                 )}
-                {!isRunning && (
-                  <button
-                    onClick={() => handleDeleteTask(task.id)}
-                    disabled={deletingId === task.id}
-                    className="flex items-center gap-1 text-red-500/70 hover:text-red-500 disabled:opacity-50"
-                    title="删除任务"
-                  >
-                    {deletingId === task.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3 w-3" />
-                    )}
-                  </button>
-                )}
+                {/* 删除按钮：所有状态都可以删除 */}
+                <button
+                  onClick={() => handleDeleteTask(task.id)}
+                  disabled={deletingId === task.id}
+                  className="flex items-center gap-1 text-red-500/70 hover:text-red-500 disabled:opacity-50"
+                  title="删除任务"
+                >
+                  {deletingId === task.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                </button>
               </div>
             </div>
+
+            {/* 详细目标进度列表（运行中时展开） */}
+            {isRunning && targetProgressList.length > 0 && (
+              <div className="mt-3 border-t border-border/40 pt-3 space-y-1.5 max-h-48 overflow-y-auto">
+                {targetProgressList.map((tp, idx) => (
+                  <div key={idx} className="flex items-center gap-2 text-xs">
+                    <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", 
+                      tp.phase === 'done' ? 'bg-green-500' :
+                      tp.phase === 'error' ? 'bg-red-500' :
+                      'bg-blue-500 animate-pulse'
+                    )} />
+                    <span className="truncate font-mono text-[11px] flex-1">
+                      {tp.url}
+                    </span>
+                    <span className={cn("shrink-0", getPhaseColor(tp.phase))}>
+                      {getPhaseLabel(tp.phase)}
+                    </span>
+                    {tp.phase === 'downloading' && tp.filesDownloaded > 0 && (
+                      <span className="shrink-0 text-muted-foreground">{tp.filesDownloaded} 文件</span>
+                    )}
+                    {tp.phase === 'scanning' && tp.rawFindings > 0 && (
+                      <span className="shrink-0 text-muted-foreground">{tp.rawFindings} 原始</span>
+                    )}
+                    {tp.phase === 'done' && tp.llmFindings > 0 && (
+                      <span className="shrink-0 text-green-600 dark:text-green-400">{tp.llmFindings} 发现</span>
+                    )}
+                    {tp.phase === 'error' && tp.error && (
+                      <span className="shrink-0 text-red-500 truncate max-w-24" title={tp.error}>
+                        {tp.error.slice(0, 20)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -888,7 +1061,7 @@ function ScanResultsTab() {
   const [addingId, setAddingId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<EditForm>({ provider: "", base_url: "", model: "", key_value: "" });
-  const [testingId, setTestingId] = useState<number | null>(null);
+  const [testingIds, setTestingIds] = useState<Set<number>>(new Set());
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedAnalyses, setExpandedAnalyses] = useState<Set<number>>(new Set());
@@ -948,37 +1121,89 @@ function ScanResultsTab() {
     }
   }
 
-  async function handleTest(finding: HuntFinding) {
-    const apiKey = finding.key_value;
-    const baseUrl = finding.base_url;
-    const model = finding.model;
-    if (!apiKey || !baseUrl || !model) {
-      alert("请先编辑补全 base_url 和 model 信息");
-      return;
+  /**
+   * 核心测试函数（可复用）
+   * - 信息完整：先用现有信息测试，失败再遍历模板
+   * - 信息不全：直接遍历模板
+   * - 模板测试通过：自动更新 finding 的 provider/base_url/model
+   */
+  async function testFinding(f: HuntFinding): Promise<TestResult> {
+    const apiKey = f.key_value;
+    if (!apiKey) return { success: false, latency_ms: 0, message: "无 API Key" };
+
+    // 信息完整 → 先用现有信息测试
+    if (f.base_url && f.model) {
+      try {
+        const res = await fetch("/api/hunt/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: apiKey,
+            base_url: f.base_url,
+            model: f.model,
+            provider: f.provider,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          return { success: true, latency_ms: data.latency_ms || 0, message: "Key 可用", response_preview: data.response_preview };
+        }
+        // 现有信息失败 → fallback 遍历模板
+      } catch (err) {
+        // 网络错误也 fallback 遍历模板
+      }
     }
-    setTestingId(finding.id);
-    setTestResults(prev => ({ ...prev, [finding.id]: undefined as unknown as TestResult }));
+
+    // 信息不全 或 现有信息失败 → 遍历模板
     try {
-      const res = await fetch("/api/hunt/test", {
+      const res = await fetch("/api/hunt/test-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: apiKey,
-          base_url: baseUrl,
-          model,
-          provider: finding.provider,
-        }),
+        body: JSON.stringify({ api_key: apiKey }),
       });
       const data = await res.json();
-      setTestResults(prev => ({ ...prev, [finding.id]: data }));
+      const workedList: WorkedTemplate[] = data.worked || [];
+      const workedNames = workedList.map((w: { template: string }) => w.template).join(", ") || "";
+
+      // 模板测试通过 → 自动更新 finding
+      if (data.usable && workedList.length > 0) {
+        const best = workedList[0];
+        try {
+          await fetch("/api/hunt/results", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: f.id,
+              provider: best.type,
+              base_url: best.base_url,
+              model: best.model,
+            }),
+          });
+        } catch { /* ignore */ }
+      }
+
+      return {
+        success: !!data.usable,
+        latency_ms: 0,
+        message: data.usable
+          ? `可用: ${workedNames}`
+          : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
+        worked: workedList,
+      };
     } catch (err) {
-      setTestResults(prev => ({
-        ...prev,
-        [finding.id]: { success: false, latency_ms: 0, message: `请求失败: ${err instanceof Error ? err.message : String(err)}` },
-      }));
-    } finally {
-      setTestingId(null);
+      return { success: false, latency_ms: 0, message: `请求失败: ${err instanceof Error ? err.message : String(err)}` };
     }
+  }
+
+  /** 单个测试：设置 UI 状态 + 调用核心函数 */
+  async function handleTest(finding: HuntFinding) {
+    if (!finding.key_value) { alert("该发现没有 API Key"); return; }
+    setTestingIds(prev => new Set(prev).add(finding.id));
+    setTestResults(prev => ({ ...prev, [finding.id]: undefined as unknown as TestResult }));
+    const result = await testFinding(finding);
+    setTestResults(prev => ({ ...prev, [finding.id]: result }));
+    setTestingIds(prev => { const next = new Set(prev); next.delete(finding.id); return next; });
+    if (result.success) fetchFindings();
   }
 
   async function handleDelete(findingId: number) {
@@ -991,6 +1216,22 @@ function ScanResultsTab() {
       }
     } catch (err) {
       alert(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleRemoveMonitor(findingId: number) {
+    if (!confirm("确定从监控中移除？")) return;
+    setAddingId(findingId);
+    try {
+      const res = await fetch(`/api/hunt/results?id=${findingId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        fetchFindings();
+      }
+    } catch (err) {
+      alert(`移除失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAddingId(null);
     }
   }
 
@@ -1092,105 +1333,74 @@ function ScanResultsTab() {
   }
 
   /**
-   * 一键测试全部：遍历所有有 key_value 的 finding，用所有模板测试
+   * 一键测试全部：并发调用 testFinding
    */
   async function handleBatchTestAll() {
     const testable = findings.filter(f => f.key_value);
-    if (testable.length === 0) {
-      alert("没有可测试的 Key");
-      return;
-    }
-    if (!confirm(`将用所有模板测试 ${testable.length} 个 Key 的可用性，是否继续？`)) return;
+    if (testable.length === 0) { alert("没有可测试的 Key"); return; }
+    if (!confirm(`将并发测试 ${testable.length} 个 Key，是否继续？`)) return;
 
     setBatchTesting(true);
     setBatchProgress({ tested: 0, total: testable.length });
 
-    for (let i = 0; i < testable.length; i++) {
-      const f = testable[i];
-      setTestingId(f.id);
-      try {
-        const res = await fetch("/api/hunt/test-all", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_key: f.key_value }),
-        });
-        const data = await res.json();
-        const workedNames = data.worked?.map((w: { template: string }) => w.template).join(", ") || "";
-        setTestResults(prev => ({ ...prev, [f.id]: {
-          success: data.usable,
-          latency_ms: 0,
-          message: data.usable
-            ? `可用: ${workedNames}`
-            : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
-          worked: data.worked || [],
-        }}));
-      } catch (err) {
-        setTestResults(prev => ({
-          ...prev,
-          [f.id]: { success: false, latency_ms: 0, message: `请求失败: ${err instanceof Error ? err.message : String(err)}` },
-        }));
-      }
-      setBatchProgress({ tested: i + 1, total: testable.length });
-    }
+    let testedCount = 0;
+    await Promise.all(testable.map(async (f) => {
+      setTestingIds(prev => new Set(prev).add(f.id));
+      const result = await testFinding(f);
+      setTestResults(prev => ({ ...prev, [f.id]: result }));
+      setTestingIds(prev => { const next = new Set(prev); next.delete(f.id); return next; });
+      testedCount++;
+      setBatchProgress({ tested: testedCount, total: testable.length });
+    }));
 
-    setTestingId(null);
     setBatchTesting(false);
     setBatchProgress(null);
+    fetchFindings();
   }
 
   /**
-   * 一键删除不可用：基于已有测试结果，删除测试失败的
-   * 如果还没有测试结果，先跑测试
+   * 一键删除不可用：没有测试结果的先跑测试，然后删除失败的
    */
   async function handleDeleteUnavailable() {
-    // 找出有 key_value 但没有测试结果的
     const testable = findings.filter(f => f.key_value);
     const notTested = testable.filter(f => !testResults[f.id]);
-    const tested = testable.filter(f => testResults[f.id]);
 
     if (notTested.length > 0) {
-      if (!confirm(`有 ${notTested.length} 个 Key 还没有测试结果，是否先测试？(共 ${testable.length} 个)`)) return;
+      if (!confirm(`有 ${notTested.length} 个 Key 未测试，是否先测试？(共 ${testable.length} 个)`)) return;
     }
 
-    // 测试还没有结果的
+    // 本地记录新测试结果（避免 React 状态延迟）
+    const newResults = new Map<number, boolean>();
+
     if (notTested.length > 0) {
       setBatchTesting(true);
       setBatchProgress({ tested: 0, total: notTested.length });
 
-      for (let i = 0; i < notTested.length; i++) {
-        const f = notTested[i];
-        setTestingId(f.id);
-        try {
-          const res = await fetch("/api/hunt/test-all", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: f.key_value }),
-          });
-          const data = await res.json();
-          const workedNames = data.worked?.map((w: { template: string }) => w.template).join(", ") || "";
-          setTestResults(prev => ({ ...prev, [f.id]: {
-            success: data.usable,
-            latency_ms: 0,
-            message: data.usable
-              ? `可用: ${workedNames}`
-              : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
-            worked: data.worked || [],
-          }}));
-        } catch { /* ignore */ }
-        setBatchProgress({ tested: i + 1, total: notTested.length });
-      }
+      let testedCount = 0;
+      await Promise.all(notTested.map(async (f) => {
+        setTestingIds(prev => new Set(prev).add(f.id));
+        const result = await testFinding(f);
+        newResults.set(f.id, result.success);
+        setTestResults(prev => ({ ...prev, [f.id]: result }));
+        setTestingIds(prev => { const next = new Set(prev); next.delete(f.id); return next; });
+        testedCount++;
+        setBatchProgress({ tested: testedCount, total: notTested.length });
+      }));
 
-      setTestingId(null);
       setBatchTesting(false);
       setBatchProgress(null);
+      fetchFindings();
     }
 
-    // 现在所有 key 都有测试结果了，找出失败的
+    // 找出所有失败的（旧 state + 新本地 Map）
     const failedIds: number[] = [];
     for (const f of testable) {
-      const result = testResults[f.id];
-      if (!result?.success) {
-        failedIds.push(f.id);
+      const newRes = newResults.get(f.id);
+      if (newRes !== undefined) {
+        if (!newRes) failedIds.push(f.id);
+      } else {
+        const result = testResults[f.id];
+        if (!result?.success) failedIds.push(f.id);
       }
     }
 
@@ -1199,17 +1409,17 @@ function ScanResultsTab() {
       return;
     }
 
-    if (!confirm(`发现 ${failedIds.length} 个 Key 在所有模板上均不可用，是否删除？`)) return;
+    if (!confirm(`发现 ${failedIds.length} 个 Key 不可用，是否删除？`)) return;
 
     setBatchDeleting(true);
     let deleted = 0;
-    for (const id of failedIds) {
+    await Promise.all(failedIds.map(async (id) => {
       try {
         const res = await fetch(`/api/hunt/results?id=${id}&action=delete`, { method: "DELETE" });
         const data = await res.json();
         if (data.success) deleted++;
       } catch { /* ignore */ }
-    }
+    }));
     setBatchDeleting(false);
     alert(`已删除 ${deleted}/${failedIds.length} 个不可用 Key`);
     fetchFindings();
@@ -1295,8 +1505,8 @@ function ScanResultsTab() {
 
       {findings.map((finding) => {
         const testResult = testResults[finding.id];
-        const isTesting = testingId === finding.id;
-        const hasFullInfo = !!(finding.key_value && finding.base_url && finding.model);
+        const isTesting = testingIds.has(finding.id);
+        const hasKey = !!finding.key_value;
 
         return (
           <div
@@ -1453,13 +1663,13 @@ function ScanResultsTab() {
                   {/* 测试 */}
                   <button
                     onClick={() => handleTest(finding)}
-                    disabled={isTesting || !hasFullInfo}
+                    disabled={isTesting || !hasKey}
                     className={cn(
                       "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
                       "border border-border/60 hover:bg-muted",
                       "disabled:cursor-not-allowed disabled:opacity-50"
                     )}
-                    title={!hasFullInfo ? "请先编辑补全信息" : "测试 Key 可用性"}
+                    title={!hasKey ? "无 API Key" : !finding.base_url || !finding.model ? "遍历模板测试" : "测试 Key 可用性"}
                   >
                     {isTesting ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1471,10 +1681,23 @@ function ScanResultsTab() {
                 </div>
                 <div className="flex gap-1.5">
                   {finding.added_to_monitor ? (
-                    <span className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-green-500/10 px-2.5 py-1.5 text-xs font-medium text-green-600 dark:text-green-400">
-                      <Check className="h-3.5 w-3.5" />
+                    <button
+                      onClick={() => handleRemoveMonitor(finding.id)}
+                      disabled={addingId === finding.id}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
+                        "bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400",
+                        "disabled:cursor-not-allowed disabled:opacity-50"
+                      )}
+                      title="点击移除监控"
+                    >
+                      {addingId === finding.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
                       已监控
-                    </span>
+                    </button>
                   ) : (
                     <button
                       onClick={() => handleAddToMonitor(finding)}

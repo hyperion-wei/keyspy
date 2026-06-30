@@ -340,7 +340,11 @@ function extractQuickContent(json: Record<string, unknown>): string | null {
   const choice = (json.choices as Array<Record<string, unknown>>)?.[0];
   if (choice) {
     const msg = choice.message as Record<string, string> | undefined;
-    return stripThinkTags(msg?.content || null);
+    if (msg) {
+      // Check content first, then reasoning_content for reasoning models
+      const content = msg.content || msg.reasoning_content || msg.reasoning || null;
+      return stripThinkTags(content);
+    }
   }
   // Anthropic
   const content = json.content as Array<Record<string, string>> | undefined;

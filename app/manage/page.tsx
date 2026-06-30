@@ -27,6 +27,7 @@ import {
   XCircle,
   Wrench,
   MessageSquare,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthGuard } from "@/components/auth-guard";
@@ -253,6 +254,7 @@ function ManageContent() {
           setError("请填写至少一个 API Key");
           return;
         }
+        setSaving(true);
         const url = editingId ? `/api/monitors/${editingId}` : "/api/monitors";
         const method = editingId ? "PUT" : "POST";
         const res = await fetch(url, {
@@ -271,6 +273,15 @@ function ManageContent() {
           setError(data.error || "操作失败");
           return;
         }
+        // 显示测试结果摘要
+        const parts: string[] = [`成功创建 ${data.total} 个`];
+        if (data.skipped && data.skipped.length > 0) {
+          parts.push(`跳过 ${data.skipped.length} 个（所有模型不可用: ${data.skipped.map((s: { key_suffix: string }) => "..." + s.key_suffix).join(", ")}）`);
+        }
+        if (data.errors && data.errors.length > 0) {
+          parts.push(`失败 ${data.errors.length} 个`);
+        }
+        alert(parts.join("\n"));
         setShowForm(false);
         fetchConfigs();
       } else if (editingId) {
@@ -293,18 +304,39 @@ function ManageContent() {
         fetchConfigs();
       } else {
         // ===== 单个创建模式 =====
-        const res = await fetch("/api/monitors", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...form,
-            template_id: selectedTemplateId ? Number(selectedTemplateId) : null,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data.error || "操作失败");
-          return;
+        // 选了模板时走批量接口（单个 key），否则走单个接口
+        if (selectedTemplateId) {
+          const res = await fetch("/api/monitors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              template_id: Number(selectedTemplateId),
+              api_keys: [form.api_key],
+              name_prefix: form.name || undefined,
+              group_name: form.group_name,
+              enabled: form.enabled,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setError(data.error || "操作失败");
+            return;
+          }
+          if (data.skipped && data.skipped.length > 0) {
+            setError("该 Key 所有模型均不可用，未创建监控");
+            return;
+          }
+        } else {
+          const res = await fetch("/api/monitors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(form),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            setError(data.error || "操作失败");
+            return;
+          }
         }
         setShowForm(false);
         fetchConfigs();
@@ -493,6 +525,13 @@ function ManageContent() {
             >
               <Layers className="h-3.5 w-3.5" />
               模板管理
+            </Link>
+            <Link
+              href="/manage/accounts"
+              className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Users className="h-3.5 w-3.5" />
+              账户管理
             </Link>
             <button
               onClick={() => setShowChat(!showChat)}
@@ -1064,7 +1103,10 @@ function ManageContent() {
                     )}
                   >
                     {saving ? (
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
+                      <>
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
+                        {isBatchMode && !editingId && "测试模型中..."}
+                      </>
                     ) : isBatchMode && !editingId ? (
                       `批量创建${apiKeysText.split(/\r?\n/).filter((s) => s.trim()).length}个`
                     ) : editingId ? (

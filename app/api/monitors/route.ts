@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { initDb, getAllMonitorConfigs, createMonitorConfig, getTemplateById } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
+import { testAllModels, ModelTestResult } from "@/lib/test-utils";
 
 initDb();
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 /**
  * GET /api/monitors - 获取所有监控配置
@@ -24,7 +26,7 @@ export async function GET() {
  *
  * 支持两种模式：
  * 1. 单个：传 name/type/base_url/api_key/model（兼容老接口）
- * 2. 模板批量：传 template_id + api_keys[]，每个 key 自动生成一个监控配置
+ * 2. 模板批量：传 template_id + api_keys[]，每个 key 先检测可用模型再创建
  */
 export async function POST(request: NextRequest) {
   const user = await getAuthUser();
@@ -75,14 +77,15 @@ function handleSingle(body: Record<string, unknown>) {
   return NextResponse.json(config, { status: 201 });
 }
 
-function handleTemplateBatch(body: Record<string, unknown>) {
-  const { template_id, api_keys, group_name, enabled, name_prefix, fallback_models: fallbackOverride } = body as {
+async function handleTemplateBatch(body: Record<string, unknown>) {
+  const { template_id, api_keys, group_name, enabled, name_prefix, fallback_models: fallbackOverride, test_models } = body as {
     template_id: number;
     api_keys: string[];
     group_name?: string;
     enabled?: boolean;
     name_prefix?: string;
     fallback_models?: string[];
+    test_models?: boolean;
   };
 
   if (!template_id || !Array.isArray(api_keys) || api_keys.length === 0) {
@@ -101,36 +104,78 @@ function handleTemplateBatch(body: Record<string, unknown>) {
   }
 
   const prefix = (name_prefix || tpl.name).trim();
-  // fallback_models: 从模板的 models 中去掉 default_model
-  const fallbackList = fallbackOverride && fallbackOverride.length > 0
+  const shouldTest = test_models !== false; // 默认启用模型测试
+
+  // 构建模板模型列表（去重，default_model 优先）
+  const allModels: string[] = [tpl.default_model];
+  for (const m of tpl.models) {
+    if (m !== tpl.default_model) allModels.push(m);
+  }
+
+  // 默认 fallback（不测试时的回退）
+  const defaultFallbackList = fallbackOverride && fallbackOverride.length > 0
     ? fallbackOverride
     : tpl.models.filter((m) => m !== tpl.default_model);
 
-  const created: unknown[] = [];
+  const created: Array<{ id: number; name: string; model: string; fallback_models: string; _tested?: string }> = [];
   const errors: string[] = [];
+  const skipped: Array<{ key_suffix: string; reason: string }> = [];
 
-  keys.forEach((apiKey, idx) => {
+  // 对每个 key 并发处理：测试模型 → 创建配置
+  const keyPromises = keys.map(async (apiKey, idx) => {
+    const name = keys.length === 1 ? prefix : `${prefix} #${idx + 1}`;
+    const keySuffix = apiKey.slice(-6);
+
+    let primaryModel = tpl.default_model;
+    let fallbackList: string[] = defaultFallbackList;
+
+    if (shouldTest && allModels.length > 0) {
+      // 并发测试所有模型
+      const results: ModelTestResult[] = await testAllModels(tpl.type, apiKey, tpl.base_url, allModels);
+      const workedModels = results.filter((r) => r.success);
+
+      if (workedModels.length > 0) {
+        // 优先选择 default_model，否则用第一个成功的
+        const defaultWorked = workedModels.find((r) => r.model === tpl.default_model);
+        primaryModel = defaultWorked ? defaultWorked.model : workedModels[0].model;
+        fallbackList = workedModels
+          .filter((r) => r.model !== primaryModel)
+          .map((r) => r.model);
+      } else {
+        // 所有模型都失败，跳过此 key
+        skipped.push({ key_suffix: keySuffix, reason: "所有模型均不可用" });
+        return;
+      }
+    }
+
     try {
-      const name = keys.length === 1 ? prefix : `${prefix} #${idx + 1}`;
       const config = createMonitorConfig({
         name,
         type: tpl.type,
         base_url: tpl.base_url,
         api_key: apiKey,
-        model: tpl.default_model,
+        model: primaryModel,
         group_name: group_name || "",
         enabled: enabled !== undefined ? (enabled ? 1 : 0) : 1,
         template_id: tpl.id,
         fallback_models: JSON.stringify(fallbackList),
       });
-      created.push(config);
+      created.push({
+        id: config.id,
+        name: config.name,
+        model: config.model,
+        fallback_models: config.fallback_models,
+        _tested: shouldTest ? `测试 ${allModels.length} 个模型，${fallbackList.length + 1} 个可用` : undefined,
+      });
     } catch (err) {
-      errors.push(err instanceof Error ? err.message : String(err));
+      errors.push(`Key ...${keySuffix}: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
 
+  await Promise.all(keyPromises);
+
   return NextResponse.json(
-    { created, errors, total: created.length },
+    { created, errors, skipped, total: created.length },
     { status: 201 }
   );
 }

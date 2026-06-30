@@ -51,6 +51,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+start.bat
 
 # ---- Debug Logs ----
 npm-debug.log*
@@ -63,6 +64,10 @@ next-env.d.ts
 
 # ---- Screenshots & Test Artifacts ----
 test-screens/
+*.png
+!docs/screenshots/*.png
+!public/*.png
+!app/favicon.png
 
 # ---- Large Binaries (gitleaks > 20MB) ----
 tools/gitleaks/gitleaks.exe
