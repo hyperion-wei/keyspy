@@ -1,3 +1,198 @@
+# KeySpy — AI API Key 泄露检测与可用性监控平台
+
+KeySpy 是一款开源的 AI API Key 安全审计工具，集成了**敏感信息扫描（Hunt）**、**API 可用性监控**、**批量模型测试**等核心能力，帮助安全团队和开发者发现并管理互联网上泄露的大模型 API 密钥。
+
+---
+
+## 功能概览
+
+| 模块 | 功能 | 说明 |
+|------|------|------|
+| **Hunt 扫描** | 全网敏感信息发现 | 自动爬取目标站点文件，通过 gitleaks + AI 双重引擎检测 API Key、密码、数据库连接串等泄露 |
+| **Hunt 结果管理** | 扫描结果批量测试/删除 | 对发现的 Key 进行一键可用性测试，自动识别 Provider 和 Model |
+| **API 监控** | LLM API 可用性监控 | 定时检测 OpenAI / Anthropic / Gemini 等 API 端点的响应状态 |
+| **批量测试** | 多模型并发测试 | 支持批量添加监控配置，一键测试全部 API 可用性 |
+| **模板管理** | 监控配置模板 | 创建可复用的监控模板，快速批量部署 |
+| **LLM 管理** | AI 模型配置 | 管理 Chat 模型（用于 AI 辅助分析），支持多 Provider |
+| **分组视图** | 按 Provider 分组 | 按厂商维度查看监控状态和可用性趋势 |
+| **账户管理** | 多用户 + 角色控制 | 管理员/普通用户角色隔离 |
+
+---
+
+## 技术架构
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Next.js 全栈                     │
+├─────────────────────┬───────────────────────────┤
+│     前端 (React)     │       后端 (API Routes)    │
+│  - Tailwind + shadcn│  - gitleaks 扫描引擎       │
+│  - 暗色/亮色主题     │  - AI 分析 (Vercel AI SDK) │
+│  - 响应式布局        │  - SQLite 持久化存储       │
+│  - 实时状态更新      │  - Session Cookie 认证     │
+└─────────────────────┴───────────────────────────┘
+```
+
+### 技术栈
+
+- **框架**: Next.js 16 (Turbopack)
+- **UI**: React 19 + Tailwind CSS 4 + shadcn/ui + Radix UI
+- **数据库**: SQLite (better-sqlite3)
+- **扫描引擎**: gitleaks + 自定义增强规则
+- **AI 分析**: Vercel AI SDK（支持 OpenAI / Anthropic / Google）
+- **测试框架**: Vitest
+
+### 支持的 LLM Provider
+
+| Provider | 识别特征 |
+|----------|---------|
+| OpenAI | `sk-` 前缀, `openai.com` |
+| Anthropic | `sk-ant-` 前缀, `anthropic.com` |
+| Google (Gemini) | `AIza` 前缀 |
+| MiniMax | `sk-cp-` 前缀, `minimaxi.com` |
+| 通义千问 (DashScope) | `sk-` 前缀, `dashscope` / `bailian` |
+| 火山引擎 (Volcengine) | UUID 格式, `volces.com` |
+| SiliconFlow | `siliconflow` 关键词 |
+| DeepSeek | `deepseek` 关键词 |
+| 百川 / Moonshot / 智谱 / 零一万物 / StepFun | 上下文关键词匹配 |
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- Node.js >= 18
+- pnpm >= 10
+- gitleaks（已内置于 `tools/gitleaks/`）
+
+### 安装与运行
+
+```bash
+# 安装依赖
+pnpm install
+
+# 开发模式
+pnpm dev
+
+# 构建
+pnpm build
+
+# 生产启动
+pnpm start
+
+# 运行测试
+pnpm test
+```
+
+### 默认账户
+
+| 用户名 | 密码 | 角色 |
+|--------|------|------|
+| admin | admin123 | 管理员 |
+
+首次登录后建议立即修改密码。
+
+---
+
+## 项目结构
+
+```
+check-cx-ui/
+├── app/
+│   ├── api/               # API 路由
+│   │   ├── auth/          # 认证（登录/登出/会话）
+│   │   ├── hunt/          # Hunt 扫描引擎
+│   │   │   ├── scan/      # 扫描任务（爬取+gitleaks+AI分析）
+│   │   │   ├── results/   # 扫描结果查询
+│   │   │   ├── tasks/     # 任务状态查询
+│   │   │   ├── test/      # 单 Key 可用性测试
+│   │   │   └── test-all/  # 批量测试
+│   │   ├── monitors/      # 监控配置 CRUD
+│   │   ├── templates/     # 模板管理
+│   │   ├── chat/          # AI 对话
+│   │   ├── dashboard/     # 仪表盘数据
+│   │   └── users/         # 账户管理
+│   ├── hunt/              # Hunt 扫描页面
+│   ├── manage/            # 管理页面
+│   │   ├── accounts/      # 账户管理
+│   │   ├── llm/           # LLM 配置管理
+│   │   └── templates/     # 模板管理
+│   ├── group/             # 分组视图
+│   └── login/             # 登录页
+├── components/            # UI 组件
+├── lib/                   # 核心库
+│   ├── db.ts              # SQLite 数据库
+│   ├── auth.ts            # 认证逻辑
+│   ├── checker.ts         # API 可用性检测
+│   └── poller.ts          # 定时轮询
+├── tools/gitleaks/        # gitleaks 引擎 + 增强规则
+├── data/                  # SQLite 数据库文件
+└── test-screens/          # 测试截图
+```
+
+---
+
+## 核心流程
+
+### Hunt 扫描流程
+
+```
+目标 URL
+  ↓
+1. 爬取下载文件（crawlAndDownload）
+  ↓
+2. gitleaks 默认规则扫描
+   + gitleaks 增强规则扫描（JSON apiKey / 连接串 / 密码等）
+  ↓
+3. 结果合并去重（mergeAndFilterReports）
+  ↓
+4. 结果映射（mapToFindings）→ 过滤短匹配
+  ↓
+5. 分类识别（classifyFinding）
+   - 已知 Provider → high confidence
+   - 上下文推断 → medium confidence
+   - 前缀/UUID 回退 → medium/low confidence
+  ↓
+6. 同文件聚合 + 按 Key 去重
+  ↓
+7. AI 分析（analyzeFindings）→ 补充 model / base_url
+  ↓
+8. 存储到数据库
+```
+
+### 监控流程
+
+```
+定时任务（poller）
+  ↓
+检测各 API 端点响应
+  ↓
+记录状态 → 更新仪表盘 → 异常告警
+```
+
+---
+
+## 环境变量
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `PORT` | 服务端口 | 3000 |
+| `DATABASE_PATH` | SQLite 数据库路径 | `./data/app.db` |
+| `NEXT_DISABLE_STANDALONE` | 禁用 standalone 输出 | - |
+| `NEXT_PUBLIC_BASE_URL` | 公开访问地址（SEO 用） | - |
+
+---
+
+## 版本历史
+
+详见 [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## License
+
+MIT
 <div align="center">
 
 <img src="public/favicon.png" alt="KeySpy Logo" width="80" />
