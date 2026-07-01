@@ -147,6 +147,7 @@ const LLM_RELATED_DEFAULT_RULES = new Set([
 const LLM_RELATED_ENHANCED_RULES = new Set([
   "env-secret", "plaintext-password",
   "connection-string", "plaintext-username-password",
+  "json-api-key-sk-prefix", "json-api-key-uuid", "json-api-key-generic",
 ]);
 
 // ====== Types ======
@@ -390,6 +391,7 @@ async function runScan(taskId: number, targets: ScanTarget[]) {
       for (const finding of findings) {
         if (isAborted()) break;
         const cls = await classifyFinding(finding);
+        console.log(`[classify-result] ${finding.matchedValue.slice(0,30)} → is_llm_related=${cls.is_llm_related}, provider=${cls.provider}`);
         if (cls.is_llm_related) {
           classified.push({ finding, classified: cls });
         }
@@ -571,7 +573,9 @@ function mapToFindings(results: GitleaksResult[], tempDir: string, baseUrl: stri
       matchedValue = matchedValue.slice(matchedValue.indexOf("=") + 1);
     }
     matchedValue = sanitizeKey(matchedValue);
-    if (matchedValue.length < 8) continue;
+    if (matchedValue.length < 8) {
+      continue;
+    }
 
     const { type, provider } = inferTypeAndProvider(r, content, matchedValue);
     findings.push({
@@ -583,13 +587,30 @@ function mapToFindings(results: GitleaksResult[], tempDir: string, baseUrl: stri
 }
 
 function inferTypeAndProvider(result: GitleaksResult, content: string, matchedValue: string): { type: string; provider: string } {
-  if (result.RuleID === "generic-api-key") {
+  // sk- 前缀识别（适用于 generic-api-key 和 json-api-key-sk-prefix）
+  const isSkPrefix = result.RuleID === "generic-api-key" || result.RuleID === "json-api-key-sk-prefix";
+  if (isSkPrefix) {
     if (matchedValue.startsWith("sk-ant-")) return { type: "api_key", provider: "anthropic" };
     if (matchedValue.startsWith("sk-proj-")) return { type: "api_key", provider: "openai" };
-    if (matchedValue.startsWith("sk-")) return { type: "api_key", provider: "openai" };
+    if (matchedValue.startsWith("sk-cp-")) return { type: "api_key", provider: "minimax" };
+    if (matchedValue.startsWith("sk-")) return { type: "api_key", provider: "openai-compatible" };
     if (matchedValue.startsWith("eyJ")) return { type: "api_key", provider: "unknown" };
     return { type: "api_key", provider: "unknown" };
   }
+
+  // UUID 格式 key（火山引擎等）
+  if (result.RuleID === "json-api-key-uuid") {
+    return { type: "api_key", provider: "unknown" };
+  }
+
+  // JSON 中的通用长 key
+  if (result.RuleID === "json-api-key-generic") {
+    if (matchedValue.startsWith("sk-ant-")) return { type: "api_key", provider: "anthropic" };
+    if (matchedValue.startsWith("sk-cp-")) return { type: "api_key", provider: "minimax" };
+    if (matchedValue.startsWith("sk-")) return { type: "api_key", provider: "openai-compatible" };
+    return { type: "api_key", provider: "unknown" };
+  }
+
   if (result.RuleID.includes("openai")) return { type: "api_key", provider: "openai" };
   if (result.RuleID.includes("anthropic")) return { type: "api_key", provider: "anthropic" };
   if (result.RuleID.includes("google")) return { type: "api_key", provider: "google" };
@@ -601,12 +622,15 @@ function inferTypeAndProvider(result: GitleaksResult, content: string, matchedVa
       deepseek: "deepseek", dashscope: "dashscope", qwen: "dashscope",
       google: "google", gemini: "google", openrouter: "openrouter",
       groq: "groq", together: "together", mistral: "mistral", perplexity: "perplexity",
+      volcengine: "volcengine", doubao: "volcengine", ark: "volcengine",
+      bailian: "dashscope", siliconflow: "siliconflow",
     };
     for (const [key, prov] of Object.entries(providerMap)) {
       if (varName.includes(key)) return { type: "api_key", provider: prov };
     }
     if (matchedValue.startsWith("sk-ant-")) return { type: "api_key", provider: "anthropic" };
-    if (matchedValue.startsWith("sk-") && matchedValue.length >= 32) return { type: "api_key", provider: "openai" };
+    if (matchedValue.startsWith("sk-cp-")) return { type: "api_key", provider: "minimax" };
+    if (matchedValue.startsWith("sk-") && matchedValue.length >= 32) return { type: "api_key", provider: "openai-compatible" };
     if (matchedValue.startsWith("eyJ")) return { type: "api_key", provider: "unknown" };
     return { type: "api_key", provider: "unknown" };
   }
@@ -758,6 +782,9 @@ const LLM_API_DOMAINS = [
   "api.deepseek.com", "dashscope.aliyuncs.com", "generativelanguage.googleapis.com",
   "openrouter.ai", "api.together.xyz", "api.groq.com", "api.mistral.ai",
   "api.cohere.com", "api.perplexity.ai", "api.replicate.com",
+  "ark.cn-beijing.volces.com", "api.siliconflow.cn",
+  "api.baichuan-ai.com", "api.moonshot.cn", "api.zhipuai.cn",
+  "api.lingyiwanwu.com", "api.stepfun.com",
 ];
 
 async function classifyFinding(finding: RawFinding): Promise<{
@@ -785,16 +812,33 @@ async function classifyFinding(finding: RawFinding): Promise<{
     if (ctx.includes("minimax") || ctx.includes("minimaxi")) inferred = "minimax";
     else if (ctx.includes("deepseek")) inferred = "deepseek";
     else if (ctx.includes("openrouter")) inferred = "openrouter";
-    else if (ctx.includes("dashscope") || ctx.includes("qwen") || ctx.includes("aliyuncs")) inferred = "dashscope";
+    else if (ctx.includes("dashscope") || ctx.includes("qwen") || ctx.includes("aliyuncs") || ctx.includes("bailian")) inferred = "dashscope";
+    else if (ctx.includes("volcengine") || ctx.includes("volces") || ctx.includes("doubao") || ctx.includes("cn-beijing")) inferred = "volcengine";
+    else if (ctx.includes("siliconflow")) inferred = "siliconflow";
     else if (ctx.includes("anthropic") || ctx.includes("claude")) inferred = "anthropic";
     else if (ctx.includes("groq")) inferred = "groq";
+    else if (ctx.includes("baichuan")) inferred = "baichuan";
+    else if (ctx.includes("moonshot") || ctx.includes("kimi")) inferred = "moonshot";
+    else if (ctx.includes("zhipuai") || ctx.includes("glm")) inferred = "zhipuai";
+    else if (ctx.includes("lingyiwanwu") || ctx.includes("yi-")) inferred = "yi";
+    else if (ctx.includes("stepfun")) inferred = "stepfun";
     else if ((ctx.includes("openai") && !ctx.includes("openai-completions") && !ctx.includes("openai-chat")) || ctx.includes("gpt-")) inferred = "openai";
 
     if (inferred !== "unknown") {
       return { is_llm_related: true, finding_type: finding.type, provider: inferred, model: null, base_url: null, confidence: "medium" };
     }
 
-    if (finding.matchedValue.startsWith("sk-") && finding.matchedValue.length >= 32) {
+    if (finding.matchedValue.startsWith("sk-") && finding.matchedValue.length >= 20) {
+      return { is_llm_related: true, finding_type: "api_key", provider: "unknown", model: null, base_url: null, confidence: "medium" };
+    }
+
+    // UUID 格式 key（火山引擎等）
+    if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(finding.matchedValue)) {
+      return { is_llm_related: true, finding_type: "api_key", provider: "unknown", model: null, base_url: null, confidence: "low" };
+    }
+
+    // 从 JSON apiKey 规则发现的长 key
+    if (finding.ruleId?.startsWith("json-api-key") && finding.matchedValue.length >= 20) {
       return { is_llm_related: true, finding_type: "api_key", provider: "unknown", model: null, base_url: null, confidence: "medium" };
     }
   }
@@ -839,6 +883,11 @@ const PROVIDER_DEFAULTS: Record<string, { base_url: string; model: string }> = {
   together: { base_url: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3-70b-chat-hf" },
   mistral: { base_url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest" },
   perplexity: { base_url: "https://api.perplexity.ai/chat/completions", model: "llama-3.1-sonar-small-128k-online" },
+  volcengine: { base_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", model: "doubao-pro-32k" },
+  siliconflow: { base_url: "https://api.siliconflow.cn/v1/chat/completions", model: "deepseek-ai/DeepSeek-V3" },
+  baichuan: { base_url: "https://api.baichuan-ai.com/v1/chat/completions", model: "Baichuan4" },
+  moonshot: { base_url: "https://api.moonshot.cn/v1/chat/completions", model: "moonshot-v1-8k" },
+  zhipuai: { base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-4-flash" },
 };
 
 // ====== 同文件聚合 ======
@@ -971,7 +1020,16 @@ async function analyzeFindings(deduped: DedupedFinding[]): Promise<DedupedFindin
           if (parsed.provider && parsed.provider !== 'unknown') item.classified.provider = sanitizeKey(parsed.provider);
           if (parsed.base_url) item.classified.base_url = sanitizeKey(parsed.base_url);
           if (parsed.model) item.classified.model = sanitizeKey(parsed.model);
-          if (parsed.key_value) item.finding.matchedValue = sanitizeKey(parsed.key_value);
+          // 只有当 AI 返回的 key_value 比原始值更长且更像真实 key 时才覆盖
+          // 避免 AI 错误地提取上下文中的占位符（如 "minimax-oauth"）覆盖正确的 key
+          if (parsed.key_value) {
+            const aiKey = sanitizeKey(parsed.key_value);
+            const originalKey = item.finding.matchedValue;
+            // 只有当 AI key 更长且原始 key 看起来不完整时才覆盖
+            if (aiKey.length > originalKey.length && aiKey.length >= 20) {
+              item.finding.matchedValue = aiKey;
+            }
+          }
           item.analysis = parsed.analysis.slice(0, 800);
           break;
         }

@@ -94,3 +94,25 @@ id = "env-secret"
 description = ".env 文件中的敏感配置"
 regex = '''(?i)^[A-Z_]*(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*\s*=\s*\S+'''
 keywords = ["KEY", "SECRET", "TOKEN", "PASSWORD"]
+
+# ====== 8. JSON 配置文件中的 API Key ======
+
+[[rules]]
+id = "json-api-key-sk-prefix"
+description = "JSON 配置文件中 sk- 前缀的 API Key (apiKey/api_key/api-key 字段)"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")((?:sk-)[a-zA-Z0-9_\-]{20,})"'''
+keywords = ["apiKey", "api_key", "api-key"]
+
+[[rules]]
+id = "json-api-key-uuid"
+description = "JSON 配置文件中的 UUID 格式 API Key (apiKey/api_key/api-key 字段)"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")((?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))"'''
+keywords = ["apiKey", "api_key", "api-key"]
+
+[[rules]]
+id = "json-api-key-generic"
+description = "JSON 配置文件中的其他长字符串 API Key (apiKey/api_key/api-key 字段, 30+字符)"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")([a-zA-Z0-9_\-]{30,})"'''
+keywords = ["apiKey", "api_key", "api-key"]
+[[rules.allowlists]]
+regexes = ['''(?i)(?:placeholder|example|your-api-key|xxx|changeme|test-key|dummy|mock)''']
