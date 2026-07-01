@@ -2,30 +2,8 @@ import { describe, it, expect } from 'vitest';
 
 // 从 models.json 提取的实际 apiKey 行
 const MODELS_JSON_SAMPLE = `{
-  "providers": {
-    "minimax-portal": {
-      "baseUrl": "https://api.minimaxi.com/anthropic",
-      "api": "anthropic-messages",
-      "authHeader": true,
-      "apiKey": "minimax-oauth"
-    },
-    "minimax-cn": {
-      "baseUrl": "https://api.minimaxi.com/anthropic",
-      "api": "anthropic-messages",
-      "authHeader": true,
-      "apiKey": "sk-cp-9aRHj5VkZwFT_3abZjyekBLxL6Efh4lCLLCnyHYBvf2k7G0HZOHKR2QJaAKIrD0jNmT7LFrFoommVm0yEwO1CaLb2b0aoq3-Kx-eky9NCaZ-L1ppr3Xw-2s"
-    },
-    "bailian": {
-      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "apiKey": "sk-97a409d2b9944237b4367e54f45ee257",
-      "api": "openai-completions"
-    },
-    "volcengine": {
-      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
-      "apiKey": "4f16d1b5-d473-44b6-9ca3-175f2e8300f5",
-      "api": "openai-completions"
-    }
-  }
+  
+  
 }`;
 
 // enhanced-rules.toml 中的 3 条新规则 (用 RegExp 构造以支持 (?i))
