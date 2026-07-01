@@ -8,7 +8,7 @@
 
 **AI API Key Leak Detection & Availability Monitoring Platform**
 
-[中文](#中文) | [English](#english)
+[**🇨🇳 中文**](#lang-zh) &nbsp;|&nbsp; [**🇺🇸 English**](#lang-en)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)
@@ -21,11 +21,13 @@
 
 ---
 
-<a id="中文"></a>
+<div id="lang-zh"></div>
 
 # 中文
 
 KeySpy 是一款自托管的 AI API Key 安全审计平台，集成了**敏感信息扫描（Hunt）**、**API 可用性监控**、**批量模型测试**等核心能力，帮助安全团队和开发者发现并管理互联网上泄露的大模型 API 密钥。
+
+> 🌐 [Switch to English](#lang-en)
 
 ## 功能概览
 
@@ -252,11 +254,11 @@ keyspy/
 
 详见 [CHANGELOG.md](./CHANGELOG.md)
 
-[⬆ 返回顶部](#中文)
+<p align="right"><a href="#lang-en">🌐 Switch to English</a> · <a href="#lang-zh">⬆ 返回顶部</a></p>
 
 ---
 
-<a id="english"></a>
+<div id="lang-en"></div>
 
 # English
 
@@ -490,4 +492,4 @@ See [CHANGELOG.md](./CHANGELOG.md)
 
 MIT
 
-[⬆ Back to Top](#english)
+<p align="right"><a href="#lang-zh">🇨🇳 切换到中文</a> · <a href="#lang-en">⬆ Back to Top</a></p>
