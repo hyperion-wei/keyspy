@@ -147,6 +147,17 @@ function ManageContent() {
   // AI 聊天面板
   const [showChat, setShowChat] = useState(false);
 
+  // Key 验证模式
+  const [showKeyVerify, setShowKeyVerify] = useState(false);
+  const [verifyKeysText, setVerifyKeysText] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResults, setVerifyResults] = useState<Array<{
+    key: string;
+    keySuffix: string;
+    results: Array<{ template: string; templateId: number; type: string; base_url: string; model: string; success: boolean; message: string }>;
+    usable: boolean;
+  }>>([]);
+
   const fetchConfigs = useCallback(async () => {
     try {
       const res = await fetch("/api/monitors");
@@ -493,6 +504,102 @@ function ManageContent() {
     window.location.href = "/login";
   }
 
+  // === Key 验证功能 ===
+  async function handleVerifyKeys() {
+    const keys = verifyKeysText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (keys.length === 0) return;
+
+    setVerifying(true);
+    setVerifyResults([]);
+
+    const results: typeof verifyResults = [];
+    // 并发验证所有 key
+    await Promise.all(
+      keys.map(async (key) => {
+        try {
+          const res = await fetch("/api/hunt/test-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key }),
+          });
+          const data = await res.json();
+          results.push({
+            key,
+            keySuffix: key.slice(-8),
+            results: data.results || [],
+            usable: data.usable || false,
+          });
+        } catch {
+          results.push({
+            key,
+            keySuffix: key.slice(-8),
+            results: [],
+            usable: false,
+          });
+        }
+      })
+    );
+
+    setVerifyResults(results);
+    setVerifying(false);
+  }
+
+  // 一键添加验证通过的 key 到监控
+  async function handleAddVerifiedKey(key: string, templateId: number, model: string) {
+    try {
+      const res = await fetch("/api/monitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_id: templateId,
+          api_keys: [key],
+          enabled: true,
+        }),
+      });
+      if (res.ok) {
+        fetchConfigs();
+        // 从验证结果中移除该 key
+        setVerifyResults((prev) => prev.filter((r) => r.key !== key));
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 批量添加所有可用 key
+  async function handleAddAllVerified() {
+    const usableKeys = verifyResults.filter((r) => r.usable);
+    if (usableKeys.length === 0) return;
+
+    setVerifying(true);
+    let addedCount = 0;
+
+    for (const result of usableKeys) {
+      const workingTemplates = result.results.filter((r) => r.success);
+      for (const tpl of workingTemplates) {
+        try {
+          const res = await fetch("/api/monitors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              template_id: tpl.templateId,
+              api_keys: [result.key],
+              enabled: true,
+            }),
+          });
+          if (res.ok) addedCount++;
+        } catch { /* ignore */ }
+      }
+    }
+
+    setVerifying(false);
+    if (addedCount > 0) {
+      fetchConfigs();
+      setVerifyResults([]);
+      alert(`已成功添加 ${addedCount} 个监控配置`);
+    }
+  }
+
   function handleTypeChange(type: string) {
     setForm((f) => ({
       ...f,
@@ -593,6 +700,136 @@ function ManageContent() {
           <p className="mt-2 text-xs text-muted-foreground">
             当前：每 <span className="font-medium text-foreground">{POLL_PRESETS.find((p) => p.value === pollInterval)?.label || `${pollInterval}秒`}</span> 探测一次各 API 端点存活状态
           </p>
+        </div>
+
+        {/* Key 验证模式 */}
+        <div className="mb-6 rounded-2xl border border-border/40 bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-foreground" />
+              <h2 className="text-sm font-semibold text-foreground">Key 验证</h2>
+            </div>
+            <button
+              onClick={() => setShowKeyVerify(!showKeyVerify)}
+              className={cn(
+                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                showKeyVerify ? "bg-green-500" : "bg-muted"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+                  showKeyVerify ? "translate-x-5" : "translate-x-1"
+                )}
+              />
+            </button>
+          </div>
+          {showKeyVerify && (
+            <>
+              <p className="mb-3 text-xs text-muted-foreground">
+                输入任意 API Key，自动遍历所有模板测试可用性，一键添加可用 Key 到监控。
+              </p>
+              <textarea
+                value={verifyKeysText}
+                onChange={(e) => setVerifyKeysText(e.target.value)}
+                placeholder={"sk-xxx\nsk-yyy\nsk-zzz"}
+                rows={4}
+                className="w-full resize-none rounded-xl border border-border/60 bg-background/50 px-3 py-2.5 font-mono text-sm focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20 mb-3"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleVerifyKeys}
+                  disabled={verifying || !verifyKeysText.trim()}
+                  className={cn(
+                    "flex items-center gap-2 rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:bg-foreground/90",
+                    (verifying || !verifyKeysText.trim()) && "cursor-not-allowed opacity-60"
+                  )}
+                >
+                  {verifying ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
+                      测试模板中...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      验证 {verifyKeysText.split(/\r?\n/).filter((s) => s.trim()).length} 个 Key
+                    </>
+                  )}
+                </button>
+                {verifyResults.filter((r) => r.usable).length > 0 && (
+                  <button
+                    onClick={handleAddAllVerified}
+                    disabled={verifying}
+                    className="flex items-center gap-2 rounded-xl bg-green-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-600"
+                  >
+                    <Plus className="h-4 w-4" />
+                    一键添加所有可用
+                  </button>
+                )}
+              </div>
+
+              {/* 验证结果 */}
+              {verifyResults.length > 0 && (
+                <div className="mt-4 space-y-3">
+                  {verifyResults.map((result, idx) => (
+                    <div
+                      key={idx}
+                      className={cn(
+                        "rounded-xl border p-3",
+                        result.usable
+                          ? "border-green-500/30 bg-green-500/5"
+                          : "border-red-500/30 bg-red-500/5"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        {result.usable ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-red-500" />
+                        )}
+                        <span className="font-mono text-sm">
+                          ...{result.keySuffix}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {result.usable
+                            ? `${result.results.filter((r) => r.success).length} 个模板可用`
+                            : "所有模板均失败"}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {result.results.map((r, rIdx) => (
+                          <div
+                            key={rIdx}
+                            className={cn(
+                              "flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs",
+                              r.success
+                                ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                : "bg-red-500/10 text-red-500/70"
+                            )}
+                          >
+                            <span>{r.template}</span>
+                            {r.success && (
+                              <span className="text-[10px] opacity-70">({r.model})</span>
+                            )}
+                            {r.success && (
+                              <button
+                                onClick={() => handleAddVerifiedKey(result.key, r.templateId, r.model)}
+                                className="ml-1 rounded p-0.5 hover:bg-green-500/20"
+                                title="添加监控"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Actions */}

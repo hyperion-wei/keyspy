@@ -88,8 +88,8 @@ const GITLEAKS_ENHANCED_RULES = findEnhancedRules();
 console.log(`[hunt/scan] gitleaks: path=${GITLEAKS_PATH}, enhanced_rules=${GITLEAKS_ENHANCED_RULES || '(未找到)'}`);
 
 // ====== 目录爬取配置 ======
-const MAX_DEPTH = 3;
-const MAX_FILES = 300;
+const MAX_DEPTH = 5;
+const MAX_FILES = 1000;
 const FETCH_TIMEOUT = 8000;
 const MAX_CONTENT_SIZE = 200000;
 const MAX_CONCURRENCY = 3; // 最大并发数
@@ -106,37 +106,102 @@ interface TargetProgress {
 }
 
 const SENSITIVE_FILES = new Set([
-  ".env", ".env.local", ".env.production", ".env.development",
+  // --- 环境变量 ---
+  ".env", ".env.local", ".env.production", ".env.development", ".env.example",
+  ".env.test", ".env.staging", ".env.backup", ".env.sample",
+  // --- Shell / 历史 ---
   ".npmrc", ".bash_history", ".zsh_history", ".bashrc", ".zshrc", ".profile",
+  // --- Git ---
   ".gitconfig", ".git-credentials",
+  // --- 通用配置 ---
   "config.json", "config.yaml", "config.yml", "config.toml", "config.ini",
   "settings.json", "package.json", "docker-compose.yml", "docker-compose.yaml",
   "Dockerfile", "Makefile",
+  // --- 凭据 / 密钥文件 ---
+  "credentials", "credentials.json", "secrets.json", "secret.json", ".secrets",
+  ".htpasswd", ".pgpass", ".my.cnf", ".netrc",
+  "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa",
+  // --- 云服务 / 框架配置 ---
+  "application.yml", "application.properties", "application.conf", "reference.conf",
+  "appsettings.json", "appsettings.Development.json",
+  "wp-config.php", "database.yml", "database.yml.enc",
+  "terraform.tfvars", "kubeconfig",
 ]);
 
 const SCANNABLE_EXTS = new Set([
+  // --- 配置文件 ---
   ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg",
-  ".env", ".txt", ".md", ".log", ".sh", ".bash", ".zsh", ".py", ".js", ".ts",
-  ".html", ".htm", ".xml", ".csv", ".sql", ".properties",
+  ".env", ".txt", ".md", ".log", ".properties",
+  // --- 脚本 / 源码 ---
+  ".sh", ".bash", ".zsh", ".py", ".js", ".ts", ".jsx", ".tsx",
+  ".go", ".java", ".rb", ".php", ".cs", ".kt", ".scala",
+  // --- 标记 / 数据 ---
+  ".html", ".htm", ".xml", ".csv", ".sql",
+  // --- 基础设施即代码 ---
+  ".tf", ".tfvars", ".hcl",
+  // --- 无扩展名（如 .env、Makefile）---
   "",
 ]);
 
 const BINARY_EXTS = new Set([
+  // --- 数据库 ---
   ".db", ".sqlite", ".sqlite3", ".db-shm", ".db-wal",
-  ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp",
-  ".mp4", ".mp3", ".wav", ".avi", ".mov",
-  ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
-  ".exe", ".dll", ".so", ".dylib", ".bin",
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-  ".md5", ".sha1", ".sha256",
+  // --- 图片 ---
+  ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp", ".tiff",
+  // --- 音视频 ---
+  ".mp4", ".mp3", ".wav", ".avi", ".mov", ".mkv", ".flac", ".ogg",
+  // --- 压缩包 ---
+  ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+  // --- 二进制 / 可执行 ---
+  ".exe", ".dll", ".so", ".dylib", ".bin", ".msi",
+  // --- 办公文档 ---
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  // --- 哈希 / 校验 ---
+  ".md5", ".sha1", ".sha256", ".sha512",
+  // --- 锁文件 / PID ---
   ".lock", ".pid",
+  // --- 字体 ---
   ".woff", ".woff2", ".ttf", ".eot",
+  // --- 编译产物 / 缓存 ---
+  ".map", ".wasm", ".class", ".jar", ".war",
+  ".pyc", ".pyo", ".o", ".obj",
+  // --- 安装包 / 磁盘镜像 ---
+  ".dmg", ".iso", ".pkg", ".deb", ".rpm",
 ]);
 
 const SKIP_DIRS = new Set([
+  // --- 包管理 / 缓存 ---
   "node_modules", ".git", ".svn", "__pycache__", ".cache",
-  ".local", ".npm", ".cargo", ".rustup",
+  ".local", ".npm", ".pnpm-store", ".cargo", ".rustup",
+  // --- 构建产物 ---
+  ".next", ".nuxt", "build", "dist", "out", "target", ".output",
+  // --- IDE / 编辑器 ---
+  ".gradle", ".idea", ".vscode", ".vs",
+  // --- 虚拟环境 / 测试缓存 ---
+  "venv", "env", ".tox", ".mypy_cache", ".pytest_cache",
+  // --- IaC 状态 ---
+  ".terraform",
+  // --- 前端产物 ---
+  ".storybook",
 ]);
+
+/** 文件名模式黑名单（正则）：匹配到的文件跳过下载 */
+const SKIP_FILE_PATTERNS = [
+  /\.min\.\w+$/i,         // main.min.js / style.min.css
+  /bundle\./i,             // bundle.js / chunk-bundle.xxx
+  /vendor\./i,             // vendor.js
+  /polyfill/i,             // polyfills.js
+  /chunk-[a-f0-9]{8,}/i,  // webpack chunk hash: chunk-abc12345.js
+  /\.map$/i,               // source map
+  /package-lock\.json$/i,  // npm lock（巨大且无敏感信息）
+  /yarn\.lock$/i,
+  /pnpm-lock\.yaml$/i,
+  /composer\.lock$/i,
+  /poetry\.lock$/i,
+  /Gemfile\.lock$/i,
+  /go\.sum$/i,
+  /Cargo\.lock$/i,
+];
 
 // ====== gitleaks RuleID 过滤 ======
 const LLM_RELATED_DEFAULT_RULES = new Set([
@@ -667,7 +732,13 @@ async function crawlAndDownload(
         if (link.endsWith("/")) {
           const dirName = rel.replace(/\/$/, "").split("/").pop() || "";
           if (!SKIP_DIRS.has(dirName) && !dirName.startsWith(".")) dirs.push(link);
-          else if (SENSITIVE_FILES.has(dirName) || dirName === ".config" || dirName === ".agents") dirs.push(link);
+          else if (
+            SENSITIVE_FILES.has(dirName) ||
+            dirName === ".config" || dirName === ".agents" ||
+            dirName === ".ssh" || dirName === ".aws" ||
+            dirName === ".kube" || dirName === ".docker" ||
+            dirName === ".gnupg"
+          ) dirs.push(link);
         } else {
           files.push(link);
         }
@@ -697,6 +768,7 @@ async function downloadAndSaveFile(
   const fileName = fileUrl.split("/").pop() || "";
   const ext = getExt(fileName);
   if (BINARY_EXTS.has(ext) || (ext && !SCANNABLE_EXTS.has(ext))) { stats.filesSkipped++; return; }
+  if (SKIP_FILE_PATTERNS.some(p => p.test(fileName))) { stats.filesSkipped++; return; }
 
   const content = await fetchUrl(fileUrl);
   if (!content) { stats.filesSkipped++; return; }
@@ -762,6 +834,111 @@ function getExt(filename: string): string {
   return d >= 0 ? filename.slice(d) : "";
 }
 
+// ====== 占位符/测试 Key 过滤 ======
+
+const PLACEHOLDER_PATTERNS = [
+  /^(?:sk-|pk-|api-|key-|token-)?test/i,
+  /^(?:sk-|pk-|api-|key-|token-)?demo/i,
+  /^(?:sk-|pk-|api-|key-|token-)?example/i,
+  /^(?:sk-|pk-|api-|key-|token-)?sample/i,
+  /^(?:sk-|pk-|api-|key-|token-)?placeholder/i,
+  /^(?:sk-|pk-|api-|key-|token-)?dummy/i,
+  /^(?:sk-|pk-|api-|key-|token-)?mock/i,
+  /^(?:sk-|pk-|api-|key-|token-)?fake/i,
+  /your[_-]?(?:api[_-]?)?key/i,
+  /your[_-]?token/i,
+  /insert[_-]?key/i,
+  /replace[_-]?me/i,
+  /change[_-]?me/i,
+  /xxx{3,}/i,
+  /\*{3,}/,
+  /^0{10,}$/,
+  /^1{10,}$/,
+  /^a{10,}$/i,
+  /^abc/i,
+  /^123/,
+];
+
+// 非 LLM 相关的 key 模式（误报过滤）
+const NON_LLM_KEY_PATTERNS = [
+  // JWT Token
+  /^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/,
+  // 企业微信 Webhook
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  // Cookie 值（包含 = 和 ; 的键值对格式）
+  /^[A-Za-z0-9_]+=[^;]+;\s*[A-Za-z0-9_]+=/,
+  // 纯 base64 长字符串（可能是 cookie 或加密数据）
+  /^[A-Za-z0-9+/=]{100,}$/,
+  // 空值或纯空白
+  /^\s*$/,
+  // 仅包含常见字符的短字符串
+  /^[a-zA-Z0-9]{1,15}$/,
+];
+
+// 非 LLM 相关的上下文关键词
+const NON_LLM_CONTEXT_KEYWORDS = [
+  'webhook', 'cookie', 'session', 'csrf', 'xsrf',
+  'ctrip', '携程', 'crm', 'erp', 'oa系统',
+  'qyapi.weixin.qq.com', '企业微信',
+  'dingtalk', '钉钉', 'feishu', '飞书',
+  'password', 'passwd', 'pwd', '密码',
+  'username', 'user', '用户名', '账号',
+];
+
+function isPlaceholderKey(key: string): boolean {
+  const normalized = key.toLowerCase().trim();
+  // 空值过滤
+  if (!normalized || normalized.length === 0) return true;
+  // 过短的 key 直接排除
+  if (normalized.length < 16) return true;
+  // 检查占位符模式
+  for (const pattern of PLACEHOLDER_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  // 检查是否为重复字符（如 aaaaaaaaaaaaaaaa）
+  if (/^(.)\1{9,}$/.test(normalized)) return true;
+  // 检查是否为简单序列（如 1234567890123456）
+  if (/^(?:0123456789|1234567890|9876543210)/.test(normalized)) return true;
+  return false;
+}
+
+// 检查是否为非 LLM 相关的 key（基于 key 本身特征）
+function isNonLLMKey(key: string): boolean {
+  const normalized = key.trim();
+  for (const pattern of NON_LLM_KEY_PATTERNS) {
+    if (pattern.test(normalized)) return true;
+  }
+  return false;
+}
+
+// 检查上下文是否表明这是非 LLM 相关的 key
+function hasNonLLMContext(content: string, key: string): boolean {
+  const keyIdx = content.indexOf(key);
+  if (keyIdx < 0) return false;
+  
+  // 提取 key 周围的上下文（前后各 200 字符）
+  const ctxStart = Math.max(0, keyIdx - 200);
+  const ctxEnd = Math.min(content.length, keyIdx + key.length + 200);
+  const ctx = content.slice(ctxStart, ctxEnd).toLowerCase();
+  
+  // 检查是否包含非 LLM 关键词
+  for (const keyword of NON_LLM_CONTEXT_KEYWORDS) {
+    if (ctx.includes(keyword.toLowerCase())) return true;
+  }
+  
+  // 检查是否是 cookie 或 session 相关的变量名
+  const varNameMatch = ctx.match(/([a-z_]*(?:cookie|session|token|auth)[a-z_]*)\s*[=:]/i);
+  if (varNameMatch) {
+    const varName = varNameMatch[1].toLowerCase();
+    // 排除 LLM 相关的 token
+    if (!varName.includes('api') && !varName.includes('key') && !varName.includes('llm')) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 // ====== 分类 ======
 
 const CLASSIFY_PROMPT = `分析以下从网站扫描中发现的敏感内容（由 gitleaks 检测），判断是否为 LLM/AI 模型相关的密钥泄露。
@@ -769,13 +946,22 @@ const CLASSIFY_PROMPT = `分析以下从网站扫描中发现的敏感内容（�
 判断要点：
 1. 是否为 LLM API Key（属于 openai/anthropic/google/minimax/deepseek/dashscope/openrouter/groq/together/mistral/perplexity 等）
 2. 置信度（high/medium/low）
+3. 是否为占位符/测试 key（如 sk-test-xxx、your-api-key、example-key 等），如果是则返回 {"is_llm_related": false, "reason": "placeholder"}
+4. 是否为非 LLM 系统的 key（如企业微信 webhook、cookie、session token、CRM 系统 token 等），如果是则返回 {"is_llm_related": false, "reason": "non_llm_system"}
 
-如果内容明显不是 LLM 相关的（如数据库密码、普通 Web API Key、session token 等），返回 {"is_llm_related": false}
+**误报识别要点**：
+- JWT Token（eyJ 开头）通常是会话 token，不是 LLM API Key
+- 企业微信/钉钉/飞书 webhook key 不是 LLM key
+- Cookie、Session、CSRF token 不是 LLM key
+- CRM/ERP/OA 系统的认证 token 不是 LLM key
+- 空字符串或纯空白字符不是有效 key
+
+如果内容明显不是 LLM 相关的，返回 {"is_llm_related": false}
 
 只输出 JSON：
 {"is_llm_related": true, "finding_type": "api_key", "provider": "openai", "confidence": "high"}
 或
-{"is_llm_related": false}`;
+{"is_llm_related": false, "reason": "non_llm_system"}`;
 
 const LLM_API_DOMAINS = [
   "api.openai.com", "api.anthropic.com", "api.minimaxi.com", "api.minimax.chat",
@@ -791,6 +977,24 @@ async function classifyFinding(finding: RawFinding): Promise<{
   is_llm_related: boolean; finding_type?: string; provider?: string;
   model?: string | null; base_url?: string | null; confidence?: string;
 }> {
+  // 占位符/测试 key 过滤
+  if (isPlaceholderKey(finding.matchedValue)) {
+    console.log(`[classify-filter] 占位符 key 被过滤: ${finding.matchedValue.slice(0, 30)}...`);
+    return { is_llm_related: false, finding_type: finding.type, provider: "unknown", confidence: "low" };
+  }
+
+  // 非 LLM key 特征过滤（JWT、Webhook、Cookie 等）
+  if (isNonLLMKey(finding.matchedValue)) {
+    console.log(`[classify-filter] 非 LLM key 被过滤: ${finding.matchedValue.slice(0, 30)}...`);
+    return { is_llm_related: false, finding_type: finding.type, provider: "unknown", confidence: "low" };
+  }
+
+  // 非 LLM 上下文过滤
+  if (hasNonLLMContext(finding.content, finding.matchedValue)) {
+    console.log(`[classify-filter] 非 LLM 上下文被过滤: ${finding.matchedValue.slice(0, 30)}...`);
+    return { is_llm_related: false, finding_type: finding.type, provider: "unknown", confidence: "low" };
+  }
+
   // 已知 provider → high confidence
   if (finding.provider !== "unknown") {
     return { is_llm_related: true, finding_type: finding.type, provider: finding.provider, model: null, base_url: null, confidence: "high" };
@@ -843,14 +1047,20 @@ async function classifyFinding(finding: RawFinding): Promise<{
     }
   }
 
-  // AI 分类 fallback
+  // AI 分类 fallback - 使用更多上下文
   const chatSettings = getAllChatSettings().filter((s) => s.enabled === 1);
+  // 提取 key 周围的上下文（前后各 300 字符）
+  const keyIdx = finding.content.indexOf(finding.matchedValue);
+  const ctxStart = Math.max(0, keyIdx >= 0 ? keyIdx - 300 : 0);
+  const ctxEnd = Math.min(finding.content.length, (keyIdx >= 0 ? keyIdx : 0) + finding.matchedValue.length + 300);
+  const contextSnippet = finding.content.slice(ctxStart, ctxEnd);
+
   for (const setting of chatSettings) {
     try {
       const model = createModel(setting);
       const result = await generateText({
         model, system: CLASSIFY_PROMPT,
-        prompt: `分析以下 gitleaks 发现：\n规则: ${finding.ruleId}\n类型: ${finding.type}\n匹配值: ${finding.matchedValue.slice(0, 50)}...\n来源: ${finding.path}`,
+        prompt: `分析以下 gitleaks 发现：\n规则: ${finding.ruleId}\n类型: ${finding.type}\n匹配值: ${finding.matchedValue.slice(0, 80)}\n来源文件: ${finding.path}\n\n上下文片段:\n${contextSnippet}`,
         temperature: 0.1,
       });
       const raw = result.text.trim();
@@ -992,57 +1202,122 @@ const AI_ANALYZE_PROMPT = `你是一个 API 安全分析师。分析以下包含
 **任务 2：生成分析报告**
 输出一段简短的中文分析（3-5句话）：文件类型、Key 如何被暴露、风险等级和建议
 
-**输出 JSON**：
-{"provider":"deepseek","base_url":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat","key_value":"sk-xxx","analysis":"该文件为 shell 历史记录..."}`;
+**渐进式分析规则**：
+如果你认为当前提供的上下文信息不足以完成分析，可以输出 {"need_more": true} 来请求更多上下文。
+但如果你已经能确定 provider、base_url 和分析报告，请直接输出完整结果。
 
-interface AIAnalysisResult { provider?: string; base_url?: string; model?: string; key_value?: string; analysis?: string }
+**输出 JSON**：
+完整分析：
+{"provider":"deepseek","base_url":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat","key_value":"sk-xxx","analysis":"该文件为 shell 历史记录..."}
+需要更多上下文：
+{"need_more": true}`;
+
+interface AIAnalysisResult { provider?: string; base_url?: string; model?: string; key_value?: string; analysis?: string; need_more?: boolean }
+
+// AI 分析并发数
+const AI_ANALYSIS_CONCURRENCY = 3;
 
 async function analyzeFindings(deduped: DedupedFinding[]): Promise<DedupedFinding[]> {
   const chatSettings = getAllChatSettings().filter((s) => s.enabled === 1);
+  if (chatSettings.length === 0) {
+    // 无可用 LLM，使用默认分析
+    return deduped.map(item => ({
+      ...item,
+      analysis: item.analysis || generateDefaultAnalysis(item),
+    }));
+  }
 
-  for (const item of deduped) {
+  // 过滤出需要 AI 分析的 api_key 类型
+  const apiKeyItems = deduped.filter(item => {
     const isApiKey = item.classified.finding_type === "api_key" || item.classified.finding_type === "bearer_token";
-    if (!isApiKey) continue;
+    return isApiKey && !item.analysis;
+  });
 
-    const content = item.finding.content.slice(0, 2000);
+  console.log(`[hunt/scan] AI 分析: ${apiKeyItems.length} 个 key 待分析，并发数: ${AI_ANALYSIS_CONCURRENCY}`);
+
+  // 多并发处理
+  const chunks: DedupedFinding[][] = [];
+  for (let i = 0; i < apiKeyItems.length; i += AI_ANALYSIS_CONCURRENCY) {
+    chunks.push(apiKeyItems.slice(i, i + AI_ANALYSIS_CONCURRENCY));
+  }
+
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(item => analyzeSingleFinding(item, chatSettings)));
+  }
+
+  return deduped;
+}
+
+async function analyzeSingleFinding(item: DedupedFinding, chatSettings: ChatSetting[]): Promise<void> {
+  const fullContent = item.finding.content;
+  // 渐进式披露层级：每次给 AI 更多内容
+  const disclosureLevels = [800, 2500, 5000, 8000];
+  let lastParsed: AIAnalysisResult | null = null;
+
+  for (let level = 0; level < disclosureLevels.length; level++) {
+    const content = fullContent.slice(0, disclosureLevels[level]);
+    const isFirstRound = level === 0;
+    const isLastRound = level === disclosureLevels.length - 1;
+
+    let success = false;
     for (const setting of chatSettings) {
       try {
         const model = createModel(setting);
+        const roundHint = isLastRound
+          ? "\n\n这是最大上下文，请务必输出完整分析结果，不要输出 need_more。"
+          : isFirstRound
+          ? "\n\n如果信息不足，可以输出 {\"need_more\": true} 请求更多上下文。"
+          : "\n\n如果仍不足以分析，可以输出 {\"need_more\": true}。";
+
         const result = await generateText({
           model,
           system: "你是一个 API 安全分析师。只输出 JSON，不要其他内容。不要使用思考标签。",
-          prompt: AI_ANALYZE_PROMPT + "\n\n源文件内容：\n" + content,
+          prompt: AI_ANALYZE_PROMPT + roundHint + "\n\n源文件内容（前 " + content.length + " 字符）：\n" + content,
           temperature: 0.2,
         });
         const text = result.text.trim().replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think[\s\S]*$/gi, '').trim();
         const parsed = parseAIAnalysis(text);
+
+        // AI 请求更多上下文
+        if (parsed.need_more && !isLastRound) {
+          console.log(`[ai-analyze] Round ${level + 1}: AI 请求更多上下文 (${content.length} -> ${disclosureLevels[level + 1]} chars)`);
+          lastParsed = parsed; // 保存部分结果
+          break; // 进入下一轮
+        }
+
+        // AI 返回了完整分析
         if (parsed.analysis && parsed.analysis.length > 10) {
           if (parsed.provider && parsed.provider !== 'unknown') item.classified.provider = sanitizeKey(parsed.provider);
           if (parsed.base_url) item.classified.base_url = sanitizeKey(parsed.base_url);
           if (parsed.model) item.classified.model = sanitizeKey(parsed.model);
-          // 只有当 AI 返回的 key_value 比原始值更长且更像真实 key 时才覆盖
-          // 避免 AI 错误地提取上下文中的占位符（如 "minimax-oauth"）覆盖正确的 key
           if (parsed.key_value) {
             const aiKey = sanitizeKey(parsed.key_value);
             const originalKey = item.finding.matchedValue;
-            // 只有当 AI key 更长且原始 key 看起来不完整时才覆盖
             if (aiKey.length > originalKey.length && aiKey.length >= 20) {
               item.finding.matchedValue = aiKey;
             }
           }
           item.analysis = parsed.analysis.slice(0, 800);
+          success = true;
           break;
         }
       } catch { /* next */ }
     }
 
-    if (!item.analysis) {
-      const p = item.finding.path;
-      const n = item.sourceUrls.length;
-      item.analysis = `- 泄露来源：${p}${n > 1 ? `（${n} 个文件重复发现）` : ''}\n- 上下文：密钥出现在 ${p.split('/').pop() || p}\n- 风险评估：${item.classified.confidence === 'high' ? '高风险' : '中风险'}，建议立即轮换密钥`;
-    }
+    if (success) return;
+    if (lastParsed && !lastParsed.need_more) break; // AI 明确不需要更多了但也没给出有效结果
   }
-  return deduped;
+
+  // 所有轮次都失败，使用默认分析
+  if (!item.analysis) {
+    item.analysis = generateDefaultAnalysis(item);
+  }
+}
+
+function generateDefaultAnalysis(item: DedupedFinding): string {
+  const p = item.finding.path;
+  const n = item.sourceUrls.length;
+  return `- 泄露来源：${p}${n > 1 ? `（${n} 个文件重复发现）` : ''}\n- 上下文：密钥出现在 ${p.split('/').pop() || p}\n- 风险评估：${item.classified.confidence === 'high' ? '高风险' : '中风险'}，建议立即轮换密钥`;
 }
 
 function parseAIAnalysis(text: string): AIAnalysisResult {
