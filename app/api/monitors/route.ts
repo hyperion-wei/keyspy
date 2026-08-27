@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { initDb, getAllMonitorConfigs, createMonitorConfig, getTemplateById } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
 import { testAllModels, ModelTestResult } from "@/lib/test-utils";
+import { fetchModelList } from "@/lib/model-list";
+import { MAX_FALLBACK_MODELS } from "@/lib/checker";
 
 initDb();
 
@@ -27,6 +29,9 @@ export async function GET() {
  * 支持两种模式：
  * 1. 单个：传 name/type/base_url/api_key/model（兼容老接口）
  * 2. 模板批量：传 template_id + api_keys[]，每个 key 先检测可用模型再创建
+ *
+ * 可选 fetch_models: true → 先调 /v1/models 拉取全量模型，
+ * 首选模型不变，其余写入 fallback_models（截断到上限）与 all_models
  */
 export async function POST(request: NextRequest) {
   const user = await getAuthUser();
@@ -45,8 +50,8 @@ export async function POST(request: NextRequest) {
   return handleSingle(body);
 }
 
-function handleSingle(body: Record<string, unknown>) {
-  const { name, type, base_url, api_key, model, group_name, enabled, template_id, fallback_models } = body as {
+async function handleSingle(body: Record<string, unknown>) {
+  const { name, type, base_url, api_key, model, group_name, enabled, template_id, fallback_models, fetch_models, all_models } = body as {
     name: string;
     type?: string;
     base_url: string;
@@ -56,11 +61,33 @@ function handleSingle(body: Record<string, unknown>) {
     enabled?: boolean;
     template_id?: number | null;
     fallback_models?: string;
+    fetch_models?: boolean;
+    all_models?: string[];
   };
 
   if (!name || !base_url || !api_key || !model) {
     return NextResponse.json({ error: "名称、Base URL、API Key、模型不能为空" }, { status: 400 });
   }
+
+  // 动态拉取全量模型：首选模型保持不变，其余进入降级链
+  // 优先级：前端已拉取的 all_models > fetch_models 服务端拉取 > 不拉取
+  let allModels: string | undefined;
+  let resolvedFallback = fallback_models ?? "[]";
+  const fetchedList = Array.isArray(all_models) && all_models.length > 0
+    ? all_models
+    : fetch_models
+      ? (await fetchModelList(type || "openai", base_url, api_key)).models
+      : [];
+  if (fetchedList.length > 0) {
+    allModels = JSON.stringify(fetchedList);
+    if (!fallback_models) {
+      const fallbacks = fetchedList
+        .filter((m) => m !== model)
+        .slice(0, MAX_FALLBACK_MODELS);
+      resolvedFallback = JSON.stringify(fallbacks);
+    }
+  }
+  // 拉取失败不阻断创建，降级链沿用原值
 
   const config = createMonitorConfig({
     name,
@@ -71,14 +98,15 @@ function handleSingle(body: Record<string, unknown>) {
     group_name: group_name || "",
     enabled: enabled !== undefined ? (enabled ? 1 : 0) : 1,
     template_id: template_id ?? null,
-    fallback_models: fallback_models ?? "[]",
+    fallback_models: resolvedFallback,
+    all_models: allModels,
   });
 
   return NextResponse.json(config, { status: 201 });
 }
 
 async function handleTemplateBatch(body: Record<string, unknown>) {
-  const { template_id, api_keys, group_name, enabled, name_prefix, fallback_models: fallbackOverride, test_models } = body as {
+  const { template_id, api_keys, group_name, enabled, name_prefix, fallback_models: fallbackOverride, test_models, fetch_models } = body as {
     template_id: number;
     api_keys: string[];
     group_name?: string;
@@ -86,6 +114,7 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
     name_prefix?: string;
     fallback_models?: string[];
     test_models?: boolean;
+    fetch_models?: boolean;
   };
 
   if (!template_id || !Array.isArray(api_keys) || api_keys.length === 0) {
@@ -117,7 +146,7 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
     ? fallbackOverride
     : tpl.models.filter((m) => m !== tpl.default_model);
 
-  const created: Array<{ id: number; name: string; model: string; fallback_models: string; _tested?: string }> = [];
+  const created: Array<{ id: number; name: string; model: string; fallback_models: string; _tested?: string; _models?: number }> = [];
   const errors: string[] = [];
   const skipped: Array<{ key_suffix: string; reason: string }> = [];
 
@@ -129,6 +158,21 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
     let primaryModel = tpl.default_model;
     let fallbackList: string[] = defaultFallbackList;
 
+    // 动态拉取全量模型（与模板模型测试并行）
+    let allModelsJson: string | undefined;
+    if (fetch_models) {
+      const list = await fetchModelList(tpl.type, tpl.base_url, apiKey);
+      if (list.ok) {
+        allModelsJson = JSON.stringify(list.models);
+        // 首选模型仍在列表中则保持，降级链改用全量列表（截断到上限）
+        if (list.models.includes(primaryModel)) {
+          fallbackList = list.models
+            .filter((m) => m !== primaryModel)
+            .slice(0, MAX_FALLBACK_MODELS);
+        }
+      }
+    }
+
     if (shouldTest && allModels.length > 0) {
       // 并发测试所有模型
       const results: ModelTestResult[] = await testAllModels(tpl.type, apiKey, tpl.base_url, allModels);
@@ -138,9 +182,14 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
         // 优先选择 default_model，否则用第一个成功的
         const defaultWorked = workedModels.find((r) => r.model === tpl.default_model);
         primaryModel = defaultWorked ? defaultWorked.model : workedModels[0].model;
-        fallbackList = workedModels
-          .filter((r) => r.model !== primaryModel)
-          .map((r) => r.model);
+        // 已拉取全量列表时保留全量降级链，否则用测试通过的模型
+        if (!allModelsJson) {
+          fallbackList = workedModels
+            .filter((r) => r.model !== primaryModel)
+            .map((r) => r.model);
+        } else {
+          fallbackList = fallbackList.filter((m) => m !== primaryModel);
+        }
       } else {
         // 所有模型都失败，跳过此 key
         skipped.push({ key_suffix: keySuffix, reason: "所有模型均不可用" });
@@ -159,6 +208,7 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
         enabled: enabled !== undefined ? (enabled ? 1 : 0) : 1,
         template_id: tpl.id,
         fallback_models: JSON.stringify(fallbackList),
+        all_models: allModelsJson,
       });
       created.push({
         id: config.id,
@@ -166,6 +216,7 @@ async function handleTemplateBatch(body: Record<string, unknown>) {
         model: config.model,
         fallback_models: config.fallback_models,
         _tested: shouldTest ? `测试 ${allModels.length} 个模型，${fallbackList.length + 1} 个可用` : undefined,
+        _models: allModelsJson ? JSON.parse(allModelsJson).length : undefined,
       });
     } catch (err) {
       errors.push(`Key ...${keySuffix}: ${err instanceof Error ? err.message : String(err)}`);

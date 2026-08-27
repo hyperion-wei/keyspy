@@ -139,6 +139,8 @@ const SCANNABLE_EXTS = new Set([
   ".html", ".htm", ".xml", ".csv", ".sql",
   // --- 基础设施即代码 ---
   ".tf", ".tfvars", ".hcl",
+  // --- 备份文件 ---
+  ".bak", ".old", ".orig", ".save", ".backup",
   // --- 无扩展名（如 .env、Makefile）---
   "",
 ]);
@@ -207,12 +209,15 @@ const SKIP_FILE_PATTERNS = [
 const LLM_RELATED_DEFAULT_RULES = new Set([
   "generic-api-key", "openai-api-key", "anthropic-api-key",
   "google-api-key", "aws-access-key-id", "aws-secret-access-key",
+  // gitleaks 内置厂商规则扩充（不存在的 RuleID 无副作用）
+  "alibaba-access-key-id", "alibaba-secret-key",
 ]);
 
 const LLM_RELATED_ENHANCED_RULES = new Set([
   "env-secret", "plaintext-password",
   "connection-string", "plaintext-username-password",
   "json-api-key-sk-prefix", "json-api-key-uuid", "json-api-key-generic",
+  "json-bearer-token",
 ]);
 
 // ====== Types ======
@@ -437,15 +442,19 @@ async function runScan(taskId: number, targets: ScanTarget[]) {
 
       const merged = mergeAndFilterReports(defaultResults, enhancedResults);
 
-      progress.rawFindings = merged.length;
-      console.log(`[hunt/scan] ${baseUrl} gitleaks: 默认=${defaultResults.length}, 增强=${enhancedResults.length}, 合并=${merged.length}`);
+      // 补充正则扫描层：覆盖 gitleaks 未命中的形态（裸 sk- key、Bearer token）
+      const supplemental = supplementaryScan(targetTempDir, merged);
+      const combined = [...merged, ...supplemental];
+
+      progress.rawFindings = combined.length;
+      console.log(`[hunt/scan] ${baseUrl} gitleaks: 默认=${defaultResults.length}, 增强=${enhancedResults.length}, 补充=${supplemental.length}, 合并=${combined.length}`);
       updateProgress();
 
       // === Phase 3: 分类 + 聚合 + 存储 ===
       progress.phase = 'classifying';
       updateProgress();
 
-      const findings = mapToFindings(merged, targetTempDir, baseUrl, fileUrlMap);
+      const findings = mapToFindings(combined, targetTempDir, baseUrl, fileUrlMap);
 
       // 分类并存储每个 finding
       const classified: Array<{
@@ -631,7 +640,9 @@ function mapToFindings(results: GitleaksResult[], tempDir: string, baseUrl: stri
 
     const webUrl = fileUrlMap.get(relativePath) || `${baseUrl}/${relativePath}`;
     let content = "";
-    try { content = fs.readFileSync(path.join(tempDir, relativePath), "utf-8").slice(0, 5000); } catch { /* ignore */ }
+    // 读取全文用于分类（key 可能位于文件任意位置；原先只读前 5000 字符，
+    // 导致 indexOf=-1、上下文推断失效产生漏报）；入库时再截断
+    try { content = fs.readFileSync(path.join(tempDir, relativePath), "utf-8"); } catch { /* ignore */ }
 
     let matchedValue = r.Secret;
     if (r.RuleID === "env-secret" && matchedValue.includes("=")) {
@@ -652,8 +663,8 @@ function mapToFindings(results: GitleaksResult[], tempDir: string, baseUrl: stri
 }
 
 function inferTypeAndProvider(result: GitleaksResult, content: string, matchedValue: string): { type: string; provider: string } {
-  // sk- 前缀识别（适用于 generic-api-key 和 json-api-key-sk-prefix）
-  const isSkPrefix = result.RuleID === "generic-api-key" || result.RuleID === "json-api-key-sk-prefix";
+  // sk- 前缀识别（适用于 generic-api-key、json-api-key-sk-prefix 和补充扫描）
+  const isSkPrefix = result.RuleID === "generic-api-key" || result.RuleID === "json-api-key-sk-prefix" || result.RuleID === "supplemental-sk-key";
   if (isSkPrefix) {
     if (matchedValue.startsWith("sk-ant-")) return { type: "api_key", provider: "anthropic" };
     if (matchedValue.startsWith("sk-proj-")) return { type: "api_key", provider: "openai" };
@@ -704,7 +715,74 @@ function inferTypeAndProvider(result: GitleaksResult, content: string, matchedVa
     return { type: "password", provider: "unknown" };
   }
   if (result.RuleID === "connection-string") return { type: "connection_string", provider: "unknown" };
+  // Bearer token（增强规则或补充扫描）：JWT 会在分类层被 isNonLLMKey 过滤
+  if (result.RuleID === "json-bearer-token" || result.RuleID === "supplemental-bearer") {
+    return { type: "bearer_token", provider: "unknown" };
+  }
   return { type: "api_key", provider: "unknown" };
+}
+
+// ====== 补充正则扫描层（gitleaks 盲区覆盖） ======
+
+/**
+ * gitleaks 未覆盖的形态：
+ * 1. 裸 sk- key（不在赋值语句/JSON 字段中，如 markdown、日志）
+ * 2. Authorization Bearer 形式（代码/请求头中的各种写法）
+ * 命中后与 gitleaks 结果去重，共用后续分类/过滤/聚合管道
+ */
+const SUPPLEMENTAL_PATTERNS: Array<{ id: string; regex: RegExp; capture: number }> = [
+  { id: "supplemental-sk-key", regex: /\bsk-[a-zA-Z0-9_\-]{20,120}/g, capture: 0 },
+  { id: "supplemental-bearer", regex: /bearer\s+['"]?([a-zA-Z0-9_\-.]{20,200})/gi, capture: 1 },
+];
+
+/** 单文件单规则最大命中数，防止病态文件刷爆结果 */
+const MAX_SUPPLEMENTAL_PER_FILE = 20;
+
+function supplementaryScan(tempDir: string, existing: GitleaksResult[]): GitleaksResult[] {
+  const seenSecrets = new Set(existing.map((r) => sanitizeKey(r.Secret)).filter(Boolean));
+  const results: GitleaksResult[] = [];
+
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (entry.name.includes("gitleaks-")) continue;
+      if (BINARY_EXTS.has(getExt(entry.name))) continue;
+
+      let content: string;
+      try { content = fs.readFileSync(full, "utf-8"); } catch { continue; }
+      if (content.length > MAX_CONTENT_SIZE) content = content.slice(0, MAX_CONTENT_SIZE);
+
+      for (const { id, regex, capture } of SUPPLEMENTAL_PATTERNS) {
+        regex.lastIndex = 0;
+        let count = 0;
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(content)) !== null && count < MAX_SUPPLEMENTAL_PER_FILE) {
+          const secret = sanitizeKey(m[capture] ?? m[0]);
+          if (secret.length >= 20 && !seenSecrets.has(secret)) {
+            seenSecrets.add(secret);
+            const relFile = path.relative(tempDir, full).replace(/\\/g, "/");
+            const line = content.slice(0, m.index).split("\n").length;
+            results.push({
+              RuleID: id, Description: "supplemental regex", StartLine: line, EndLine: line,
+              StartColumn: 0, EndColumn: 0, Match: m[0], Secret: secret,
+              File: full, SymlinkFile: "", Commit: "", Entropy: 0,
+              Author: "", Email: "", Date: "", Message: "", Tags: [],
+              Fingerprint: `${id}:${relFile}:${secret}`,
+            });
+            count++;
+          }
+          if (m.index === regex.lastIndex) regex.lastIndex++;
+        }
+      }
+    }
+  };
+
+  walk(tempDir);
+  return results;
 }
 
 // ====== 递归目录爬取 ======
@@ -767,7 +845,7 @@ async function downloadAndSaveFile(
 ): Promise<void> {
   const fileName = fileUrl.split("/").pop() || "";
   const ext = getExt(fileName);
-  if (BINARY_EXTS.has(ext) || (ext && !SCANNABLE_EXTS.has(ext))) { stats.filesSkipped++; return; }
+  if (BINARY_EXTS.has(ext) || !isScannableFile(fileName)) { stats.filesSkipped++; return; }
   if (SKIP_FILE_PATTERNS.some(p => p.test(fileName))) { stats.filesSkipped++; return; }
 
   const content = await fetchUrl(fileUrl);
@@ -832,6 +910,23 @@ function getExt(filename: string): string {
   if (filename.startsWith(".") && !filename.includes(".", 1)) return "";
   const d = filename.lastIndexOf(".");
   return d >= 0 ? filename.slice(d) : "";
+}
+
+/** 备份文件名后缀（如 openclaw.json.bak / config.yaml.old） */
+const BACKUP_SEGMENTS = [".bak", ".old", ".orig", ".save", ".backup"];
+
+/**
+ * 判断文件是否可扫描：
+ * 1. 扩展名在 SCANNABLE_EXTS 白名单中；
+ * 2. 或文件名带备份后缀（.bak/.old 等）——这类文件即使追加了时间戳
+ *    后缀（如 openclaw.json.bak.20260730_110257）也视为可扫描，
+ *    避免备份文件中的密钥漏报。
+ */
+function isScannableFile(filename: string): boolean {
+  const ext = getExt(filename);
+  if (!ext || SCANNABLE_EXTS.has(ext)) return true;
+  const lower = filename.toLowerCase();
+  return BACKUP_SEGMENTS.some((seg) => lower.includes(seg + ".") || lower.endsWith(seg));
 }
 
 // ====== 占位符/测试 Key 过滤 ======
@@ -939,6 +1034,55 @@ function hasNonLLMContext(content: string, key: string): boolean {
   return false;
 }
 
+// ====== 上下文关键词 → provider 映射（就近命中优先） ======
+
+const PROVIDER_CONTEXT_KEYWORDS: Array<{ keyword: string; provider: string }> = [
+  { keyword: "minimax", provider: "minimax" },
+  { keyword: "deepseek", provider: "deepseek" },
+  { keyword: "openrouter", provider: "openrouter" },
+  { keyword: "bailian", provider: "bailian" },
+  { keyword: "dashscope", provider: "dashscope" },
+  { keyword: "aliyuncs", provider: "dashscope" },
+  { keyword: "qwen", provider: "dashscope" },
+  { keyword: "volcengine", provider: "volcengine" },
+  { keyword: "volces", provider: "volcengine" },
+  { keyword: "doubao", provider: "volcengine" },
+  { keyword: "siliconflow", provider: "siliconflow" },
+  { keyword: "anthropic", provider: "anthropic" },
+  { keyword: "claude", provider: "anthropic" },
+  { keyword: "groq", provider: "groq" },
+  { keyword: "baichuan", provider: "baichuan" },
+  { keyword: "moonshot", provider: "moonshot" },
+  { keyword: "kimi", provider: "moonshot" },
+  { keyword: "zhipuai", provider: "zhipuai" },
+  { keyword: "bigmodel", provider: "zhipuai" },
+  { keyword: "lingyiwanwu", provider: "yi" },
+  { keyword: "stepfun", provider: "stepfun" },
+  { keyword: "openai", provider: "openai" },
+  { keyword: "gpt-", provider: "openai" },
+];
+
+/**
+ * 从上下文推断 provider：同文件出现多 provider 关键词时，
+ * 采用距 key 位置最近的关键词（避免固定顺序优先级导致误归类）
+ */
+function inferProviderByProximity(ctx: string, keyCenterInCtx: number): string {
+  let bestProvider = "unknown";
+  let bestDist = Infinity;
+  for (const { keyword, provider } of PROVIDER_CONTEXT_KEYWORDS) {
+    let idx = ctx.indexOf(keyword);
+    while (idx >= 0) {
+      const dist = Math.abs(idx + keyword.length / 2 - keyCenterInCtx);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestProvider = provider;
+      }
+      idx = ctx.indexOf(keyword, idx + 1);
+    }
+  }
+  return bestProvider;
+}
+
 // ====== 分类 ======
 
 const CLASSIFY_PROMPT = `分析以下从网站扫描中发现的敏感内容（由 gitleaks 检测），判断是否为 LLM/AI 模型相关的密钥泄露。
@@ -1012,21 +1156,11 @@ async function classifyFinding(finding: RawFinding): Promise<{
     const ctxEnd = Math.min(finding.content.length, (keyIdx >= 0 ? keyIdx : 0) + finding.matchedValue.length + 200);
     const ctx = finding.content.slice(ctxStart, ctxEnd).toLowerCase();
 
-    let inferred = "unknown";
-    if (ctx.includes("minimax") || ctx.includes("minimaxi")) inferred = "minimax";
-    else if (ctx.includes("deepseek")) inferred = "deepseek";
-    else if (ctx.includes("openrouter")) inferred = "openrouter";
-    else if (ctx.includes("dashscope") || ctx.includes("qwen") || ctx.includes("aliyuncs") || ctx.includes("bailian")) inferred = "dashscope";
-    else if (ctx.includes("volcengine") || ctx.includes("volces") || ctx.includes("doubao") || ctx.includes("cn-beijing")) inferred = "volcengine";
-    else if (ctx.includes("siliconflow")) inferred = "siliconflow";
-    else if (ctx.includes("anthropic") || ctx.includes("claude")) inferred = "anthropic";
-    else if (ctx.includes("groq")) inferred = "groq";
-    else if (ctx.includes("baichuan")) inferred = "baichuan";
-    else if (ctx.includes("moonshot") || ctx.includes("kimi")) inferred = "moonshot";
-    else if (ctx.includes("zhipuai") || ctx.includes("glm")) inferred = "zhipuai";
-    else if (ctx.includes("lingyiwanwu") || ctx.includes("yi-")) inferred = "yi";
-    else if (ctx.includes("stepfun")) inferred = "stepfun";
-    else if ((ctx.includes("openai") && !ctx.includes("openai-completions") && !ctx.includes("openai-chat")) || ctx.includes("gpt-")) inferred = "openai";
+    // 就近命中：取离 key 最近的 provider 关键词，避免多 provider 同文件时误归类
+    const keyCenterInCtx = keyIdx >= 0
+      ? (keyIdx - ctxStart) + finding.matchedValue.length / 2
+      : 0;
+    const inferred = inferProviderByProximity(ctx, keyCenterInCtx);
 
     if (inferred !== "unknown") {
       return { is_llm_related: true, finding_type: finding.type, provider: inferred, model: null, base_url: null, confidence: "medium" };
@@ -1094,6 +1228,7 @@ const PROVIDER_DEFAULTS: Record<string, { base_url: string; model: string }> = {
   mistral: { base_url: "https://api.mistral.ai/v1/chat/completions", model: "mistral-small-latest" },
   perplexity: { base_url: "https://api.perplexity.ai/chat/completions", model: "llama-3.1-sonar-small-128k-online" },
   volcengine: { base_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", model: "doubao-pro-32k" },
+  bailian: { base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-max" },
   siliconflow: { base_url: "https://api.siliconflow.cn/v1/chat/completions", model: "deepseek-ai/DeepSeek-V3" },
   baichuan: { base_url: "https://api.baichuan-ai.com/v1/chat/completions", model: "Baichuan4" },
   moonshot: { base_url: "https://api.moonshot.cn/v1/chat/completions", model: "moonshot-v1-8k" },

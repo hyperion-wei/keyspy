@@ -25,6 +25,9 @@ const PING_TIMEOUT_MS = 8_000;
 /** 最大并发数 */
 const DEFAULT_CONCURRENCY = 5;
 
+/** 降级链最大长度：全量模型列表可能很长，串行尝试需截断防止单轮检测耗时过长 */
+export const MAX_FALLBACK_MODELS = 15;
+
 /** 检测结果 */
 export interface ApiCheckResult extends CheckHistoryInput {
   /** 人类可读的名称（用于日志） */
@@ -502,8 +505,11 @@ async function checkWithFallback(config: MonitorConfig): Promise<ApiCheckResult>
     // 忽略 JSON 解析错误
   }
 
-  // 按优先级拼接：首选模型 + 降级模型
-  const modelsToTry = [config.model, ...fallbacks.filter((m) => m !== config.model)];
+  // 按优先级拼接：首选模型 + 降级模型（截断到上限）
+  const modelsToTry = [
+    config.model,
+    ...fallbacks.filter((m) => m !== config.model).slice(0, MAX_FALLBACK_MODELS),
+  ];
 
   let lastResult: ApiCheckResult | null = null;
   for (const model of modelsToTry) {

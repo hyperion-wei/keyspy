@@ -99,20 +99,28 @@ keywords = ["KEY", "SECRET", "TOKEN", "PASSWORD"]
 
 [[rules]]
 id = "json-api-key-sk-prefix"
-description = "JSON 配置文件中 sk- 前缀的 API Key (apiKey/api_key/api-key 字段)"
-regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")((?:sk-)[a-zA-Z0-9_\-]{20,})"'''
-keywords = ["apiKey", "api_key", "api-key"]
+description = "JSON 配置文件中 sk- 前缀的 API Key（apiKey/secretKey/token 等常见字段）"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key|apikey|accessKey|access_key|secretKey|secret_key|apiToken|api_token)"\s*:\s*")((?:sk-)[a-zA-Z0-9_\-]{20,})"'''
+keywords = ["apiKey", "api_key", "api-key", "accessKey", "secretKey", "apiToken"]
 
 [[rules]]
 id = "json-api-key-uuid"
-description = "JSON 配置文件中的 UUID 格式 API Key (apiKey/api_key/api-key 字段)"
-regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")((?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))"'''
-keywords = ["apiKey", "api_key", "api-key"]
+description = "JSON 配置文件中的 UUID 格式 API Key（apiKey/secretKey/token 等常见字段）"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key|apikey|accessKey|access_key|secretKey|secret_key|apiToken|api_token)"\s*:\s*")((?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))"'''
+keywords = ["apiKey", "api_key", "api-key", "accessKey", "secretKey", "apiToken"]
 
 [[rules]]
 id = "json-api-key-generic"
-description = "JSON 配置文件中的其他长字符串 API Key (apiKey/api_key/api-key 字段, 30+字符)"
-regex = '''(?i)(?:"(?:apiKey|api_key|api-key)"\s*:\s*")([a-zA-Z0-9_\-]{30,})"'''
-keywords = ["apiKey", "api_key", "api-key"]
+description = "JSON 配置文件中的其他长字符串 API Key（apiKey/secretKey/token 等常见字段, 30+字符）"
+regex = '''(?i)(?:"(?:apiKey|api_key|api-key|apikey|accessKey|access_key|secretKey|secret_key|apiToken|api_token)"\s*:\s*")([a-zA-Z0-9_\-]{30,})"'''
+keywords = ["apiKey", "api_key", "api-key", "accessKey", "secretKey", "apiToken"]
 [[rules.allowlists]]
 regexes = ['''(?i)(?:placeholder|example|your-api-key|xxx|changeme|test-key|dummy|mock)''']
+
+[[rules]]
+id = "json-bearer-token"
+description = "Authorization Bearer 形式的 Token（JSON 字段或代码中的请求头）"
+regex = '''(?i)(?:authorization['"]?\s*[:=]\s*['"]?bearer\s+)([a-zA-Z0-9_\-.]{20,200})'''
+keywords = ["bearer", "Bearer", "authorization", "Authorization"]
+[[rules.allowlists]]
+regexes = ['''(?i)(?:placeholder|example|your[-_]?token|xxx|changeme|dummy|mock|\$\{|%s|\{token\})''']

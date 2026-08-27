@@ -21,10 +21,21 @@ function sanitizeHeaderValue(value: string): string {
 }
 
 /**
+ * provider 标识 → 协议类型（与 hunt/test 路由保持一致）
+ */
+function providerToType(provider?: string): string {
+  if (provider === "anthropic") return "anthropic";
+  if (provider === "gemini" || provider === "google") return "gemini";
+  return "openai";
+}
+
+/**
  * POST /api/hunt/test-all
- * 用指定 API Key 遍历所有内置模板测试可用性
+ * 用指定 API Key 自动检测可用性（两级策略）：
+ * 1. 若提供 base_url + model，先实测发现来源地址（覆盖中转/代理 Key）；
+ * 2. 来源不可用或信息不全 → 并发遍历所有内置模板。
  *
- * Body: { api_key }
+ * Body: { api_key, base_url?, model?, provider? }
  * Returns: { usable, worked, results: [{template, success, message}] }
  */
 export async function POST(request: Request) {
@@ -34,7 +45,7 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { api_key } = body;
+  const { api_key, base_url, model, provider } = body;
 
   if (!api_key) {
     return Response.json({ error: "缺少 api_key" }, { status: 400 });
@@ -45,6 +56,39 @@ export async function POST(request: Request) {
     return Response.json({ error: "API Key 清理后为空" }, { status: 400 });
   }
 
+  // ===== 第一级：先实测发现来源地址（如有） =====
+  if (base_url && model) {
+    const sourceType = providerToType(provider);
+    const sourceResults: ModelTestResult[] = await sharedTestAllModels(
+      sourceType, cleanKey, String(base_url), [String(model)]
+    );
+    const ok = sourceResults.find((r) => r.success);
+    if (ok) {
+      return Response.json({
+        usable: true,
+        worked: [{
+          template: "发现来源",
+          templateId: null,
+          type: sourceType,
+          base_url: String(base_url),
+          model: ok.model,
+        }],
+        results: [{
+          template: "发现来源",
+          templateId: null,
+          type: sourceType,
+          base_url: String(base_url),
+          model: ok.model,
+          success: true,
+          message: `Key 可用 (${ok.message})`,
+          latency_ms: ok.latency_ms,
+        }],
+      });
+    }
+    // 来源地址不可用 → 继续遍历模板兜底
+  }
+
+  // ===== 第二级：遍历所有内置模板 =====
   const templates = getAllTemplates();
   if (templates.length === 0) {
     return Response.json({ error: "没有可用模板" }, { status: 500 });

@@ -363,6 +363,12 @@ function LLMSettingsContent() {
             >
               监控管理
             </Link>
+            <Link
+              href="/manage/mcp"
+              className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              MCP 管理
+            </Link>
           </div>
         </div>
       </header>

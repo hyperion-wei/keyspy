@@ -1,5 +1,19 @@
 # 更新日志
 
+## v1.26.0 (2026-08-27)
+
+### 新功能
+- **内置 MCP 服务器**：`/api/mcp` 端点（Streamable HTTP 无状态 JSON-RPC），提供 32 个工具，覆盖除账户管理外的全部功能（监控/模板/Hunt 扫描/Key 测试/LLM 配置/系统设置）
+- **MCP Token 管理**：管理页新增「MCP 管理」（`/manage/mcp`），支持生成/启停/删除 Token、一键复制 MCP 客户端配置
+- **Bearer Token 认证**：全部业务 API 支持 `Authorization: Bearer keyspy_mcp_xxx` 方式认证，Token 以创建者身份执行
+- **完整接口文档**：新增 `docs/API.md`，覆盖全部 26 个路由的接口说明
+
+### 改进
+- **Key 自动检测两级策略下沉后端**：`/api/hunt/test-all` 支持可选 `base_url/model/provider`，先实测发现来源地址（覆盖中转/代理 Key），失败再遍历模板兜底；页面与 MCP 共用同一逻辑，修复中转 Key 被误判不可用的问题
+- **Hunt 扫描支持备份文件**：可扫描扩展名新增 `.bak/.old/.orig/.save/.backup`，带时间戳后缀的备份文件（如 `config.json.bak.20260730_110257`）不再漏报
+
+---
+
 ## v1.25.0 (2026-07-01)
 
 ### 新功能

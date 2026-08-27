@@ -28,6 +28,9 @@ import {
   Wrench,
   MessageSquare,
   Users,
+  RefreshCw,
+  ListChecks,
+  Cable,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AuthGuard } from "@/components/auth-guard";
@@ -45,6 +48,8 @@ interface MonitorConfig {
   template_id?: number | null;
   fallback_models?: string;
   active_model?: string;
+  all_models?: string;
+  models_synced_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +152,14 @@ function ManageContent() {
   // AI 聊天面板
   const [showChat, setShowChat] = useState(false);
 
+  // 动态获取模型列表相关
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchModelsError, setFetchModelsError] = useState("");
+  const [fetchModelsOnSubmit, setFetchModelsOnSubmit] = useState(false);
+  const [expandedModelsId, setExpandedModelsId] = useState<number | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
+
   // Key 验证模式
   const [showKeyVerify, setShowKeyVerify] = useState(false);
   const [verifyKeysText, setVerifyKeysText] = useState("");
@@ -214,6 +227,9 @@ function ManageContent() {
     setIsBatchMode(false);
     setApiKeysText("");
     setCustomModelMode(false);
+    setFetchedModels([]);
+    setFetchModelsError("");
+    setFetchModelsOnSubmit(false);
     setError("");
     setShowForm(true);
   }
@@ -232,6 +248,9 @@ function ManageContent() {
     setSelectedTemplateId(config.template_id ? String(config.template_id) : "");
     setIsBatchMode(false);
     setApiKeysText("");
+    setFetchedModels([]);
+    setFetchModelsError("");
+    setFetchModelsOnSubmit(false);
     setCustomModelMode(Boolean(config.template_id) && !templates.find((t) => t.id === config.template_id && t.models.includes(config.model)));
     setError("");
     setShowForm(true);
@@ -277,6 +296,7 @@ function ManageContent() {
             name_prefix: form.name || undefined,
             group_name: form.group_name,
             enabled: form.enabled,
+            fetch_models: fetchModelsOnSubmit,
           }),
         });
         const data = await res.json();
@@ -326,6 +346,7 @@ function ManageContent() {
               name_prefix: form.name || undefined,
               group_name: form.group_name,
               enabled: form.enabled,
+              fetch_models: fetchModelsOnSubmit,
             }),
           });
           const data = await res.json();
@@ -341,7 +362,12 @@ function ManageContent() {
           const res = await fetch("/api/monitors", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(form),
+            body: JSON.stringify({
+              ...form,
+              // 前端已拉取的全量模型直接随表单提交，避免服务端二次请求
+              all_models: fetchedModels.length > 0 ? fetchedModels : undefined,
+              fetch_models: fetchedModels.length === 0 && fetchModelsOnSubmit ? true : undefined,
+            }),
           });
           const data = await res.json();
           if (!res.ok) {
@@ -610,6 +636,78 @@ function ManageContent() {
     }));
   }
 
+  // === 动态获取模型列表（表单内） ===
+  async function handleFetchModels() {
+    if (!form.base_url || !form.api_key) {
+      setFetchModelsError("请先填写 Base URL 和 API Key");
+      return;
+    }
+    setFetchingModels(true);
+    setFetchModelsError("");
+    try {
+      const res = await fetch("/api/models/list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: form.type, base_url: form.base_url, api_key: form.api_key }),
+      });
+      const data = await res.json();
+      if (data.ok && data.models?.length > 0) {
+        setFetchedModels(data.models);
+        setCustomModelMode(true); // 切到自由输入模式，展示动态列表选项
+        setForm((f) => ({
+          ...f,
+          model: data.models.includes(f.model) ? f.model : data.models[0],
+        }));
+      } else {
+        setFetchedModels([]);
+        setFetchModelsError(data.error || "获取模型列表失败");
+      }
+    } catch {
+      setFetchedModels([]);
+      setFetchModelsError("网络错误");
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  // === 重新同步监控项的全量模型 ===
+  async function handleSyncModels(configId: number) {
+    setSyncingId(configId);
+    try {
+      const res = await fetch(`/api/monitors/${configId}/sync-models`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`同步失败: ${data.error || "未知错误"}`);
+      } else {
+        fetchConfigs();
+      }
+    } catch {
+      alert("同步失败：网络错误");
+    } finally {
+      setSyncingId(null);
+    }
+  }
+
+  /** 解析 config 的 all_models JSON */
+  function parseAllModels(config: MonitorConfig): string[] {
+    try {
+      const parsed = JSON.parse(config.all_models || "[]");
+      return Array.isArray(parsed) ? parsed.filter((m): m is string => typeof m === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 解析 config 的 fallback_models JSON */
+  function parseFallbackModels(config: MonitorConfig): string[] {
+    try {
+      const parsed = JSON.parse(config.fallback_models || "[]");
+      return Array.isArray(parsed) ? parsed.filter((m): m is string => typeof m === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -632,6 +730,13 @@ function ManageContent() {
             >
               <Layers className="h-3.5 w-3.5" />
               模板管理
+            </Link>
+            <Link
+              href="/manage/mcp"
+              className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Cable className="h-3.5 w-3.5" />
+              MCP 管理
             </Link>
             <Link
               href="/manage/accounts"
@@ -992,7 +1097,77 @@ function ManageContent() {
                                     降级
                                   </span>
                                 )}
+                                {(() => {
+                                  const allModels = parseAllModels(config);
+                                  if (allModels.length === 0) return null;
+                                  const expanded = expandedModelsId === config.id;
+                                  return (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setExpandedModelsId(expanded ? null : config.id)}
+                                        className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                                        title="展开/收起全量模型"
+                                      >
+                                        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                        {allModels.length} 个模型
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSyncModels(config.id)}
+                                        disabled={syncingId === config.id}
+                                        className="text-muted-foreground/60 transition-colors hover:text-foreground disabled:opacity-50"
+                                        title={config.models_synced_at ? `重新同步（上次: ${new Date(config.models_synced_at).toLocaleString()}）` : "从 /v1/models 同步全量模型"}
+                                      >
+                                        <RefreshCw className={cn("h-3.5 w-3.5", syncingId === config.id && "animate-spin")} />
+                                      </button>
+                                    </>
+                                  );
+                                })()}
                               </div>
+                              {/* 全量模型展开列表 */}
+                              {expandedModelsId === config.id && (() => {
+                                const allModels = parseAllModels(config);
+                                const fallbacks = parseFallbackModels(config);
+                                if (allModels.length === 0) return null;
+                                return (
+                                  <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {allModels.map((m) => {
+                                      const isPrimary = m === config.model;
+                                      const isActive = m === config.active_model && config.active_model !== "";
+                                      const inFallback = fallbacks.includes(m);
+                                      return (
+                                        <span
+                                          key={m}
+                                          className={cn(
+                                            "inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px]",
+                                            isPrimary
+                                              ? "bg-blue-500/15 text-blue-600 dark:text-blue-400"
+                                              : isActive
+                                                ? "bg-green-500/15 text-green-600 dark:text-green-400"
+                                                : inFallback
+                                                  ? "bg-muted text-muted-foreground"
+                                                  : "bg-muted/50 text-muted-foreground/50"
+                                          )}
+                                          title={
+                                            isPrimary
+                                              ? "首选监控模型"
+                                              : isActive
+                                                ? "当前实际生效（降级中）"
+                                                : inFallback
+                                                  ? "降级链：首选不可用时按序切换"
+                                                  : "未纳入监控"
+                                          }
+                                        >
+                                          {m}
+                                          {isPrimary && " ★"}
+                                          {isActive && !isPrimary && " ●"}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
                               <div className="flex items-center gap-1.5">
                                 <span className="font-mono text-xs">Key</span>
                                 <span className="font-mono">
@@ -1191,6 +1366,38 @@ function ManageContent() {
                   </div>
                 )}
 
+                {/* 自动获取模型开关（仅创建时） */}
+                {!editingId && (
+                  <div className="rounded-xl border border-border/40 bg-muted/20 p-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFetchModelsOnSubmit(!fetchModelsOnSubmit)}
+                        className={cn(
+                          "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                          fetchModelsOnSubmit ? "bg-blue-500" : "bg-muted"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+                            fetchModelsOnSubmit ? "translate-x-5" : "translate-x-1"
+                          )}
+                        />
+                      </button>
+                      <span className="flex items-center gap-1.5 text-sm font-medium">
+                        <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />
+                        创建时自动获取全量模型 (/v1/models)
+                      </span>
+                    </div>
+                    {fetchModelsOnSubmit && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        提交时自动拉取该 Key 名下全部模型：首选模型不变，其余自动进入降级链（上限 15 个），并在卡片中展示全量模型。
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {isBatchMode && !editingId ? (
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">
@@ -1230,6 +1437,42 @@ function ManageContent() {
                       <label className="text-sm font-medium">模型</label>
                       {(() => {
                         const tpl = templates.find((t) => String(t.id) === selectedTemplateId);
+                        if (fetchedModels.length > 0) {
+                          // 动态拉取的模型列表优先展示
+                          return (
+                            <div className="flex gap-2">
+                              <select
+                                value={fetchedModels.includes(form.model) ? form.model : "__custom__"}
+                                onChange={(e) => {
+                                  if (e.target.value === "__custom__") {
+                                    setForm((f) => ({ ...f, model: "" }));
+                                  } else {
+                                    setForm((f) => ({ ...f, model: e.target.value }));
+                                  }
+                                }}
+                                className="flex-1 rounded-xl border border-border/60 bg-background/50 px-3 py-2.5 text-sm font-mono focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                required
+                              >
+                                {fetchedModels.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}{m === fetchedModels[0] ? " (推荐)" : ""}
+                                  </option>
+                                ))}
+                                {!fetchedModels.includes(form.model) && (
+                                  <option value="__custom__">+ 自定义: {form.model || "..."}</option>
+                                )}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => { setFetchedModels([]); setCustomModelMode(false); }}
+                                className="flex items-center gap-1 rounded-xl border border-border/60 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted"
+                                title="清除动态模型列表"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          );
+                        }
                         if (tpl && !customModelMode) {
                           return (
                             <div className="flex gap-2">
@@ -1267,6 +1510,23 @@ function ManageContent() {
                               className="flex-1 rounded-xl border border-border/60 bg-background/50 px-3 py-2.5 text-sm font-mono focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/20"
                               required
                             />
+                            <button
+                              type="button"
+                              onClick={handleFetchModels}
+                              disabled={fetchingModels}
+                              className={cn(
+                                "flex items-center gap-1 rounded-xl border border-border/60 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted",
+                                fetchingModels && "cursor-not-allowed opacity-60"
+                              )}
+                              title="从 /v1/models 获取全量模型"
+                            >
+                              {fetchingModels ? (
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+                              ) : (
+                                <RefreshCw className="h-3.5 w-3.5" />
+                              )}
+                              获取模型
+                            </button>
                             {tpl && (
                               <button
                                 type="button"
@@ -1280,6 +1540,14 @@ function ManageContent() {
                           </div>
                         );
                       })()}
+                      {fetchModelsError && (
+                        <p className="mt-1 text-xs text-red-500">{fetchModelsError}</p>
+                      )}
+                      {fetchedModels.length > 0 && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          已获取 {fetchedModels.length} 个模型，保存后其余模型自动进入降级链
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

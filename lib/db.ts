@@ -60,6 +60,8 @@ export function initDb() {
         template_id INTEGER REFERENCES monitor_templates(id) ON DELETE SET NULL,
         fallback_models TEXT DEFAULT '[]',
         active_model TEXT DEFAULT '',
+        all_models TEXT DEFAULT '[]',
+        models_synced_at DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -138,6 +140,17 @@ export function initDb() {
 
       CREATE INDEX IF NOT EXISTS idx_hunt_findings_task
         ON hunt_findings(task_id);
+
+      CREATE TABLE IF NOT EXISTS mcp_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_by INTEGER NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        last_used_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+      );
     `);
 
     // 兑容已存在的数据库：逐步为 monitor_configs 补充新列
@@ -151,6 +164,8 @@ export function initDb() {
     addColumnSafely("monitor_configs", "template_id INTEGER REFERENCES monitor_templates(id) ON DELETE SET NULL");
     addColumnSafely("monitor_configs", "fallback_models TEXT DEFAULT '[]'");
     addColumnSafely("monitor_configs", "active_model TEXT DEFAULT ''");
+    addColumnSafely("monitor_configs", "all_models TEXT DEFAULT '[]'");
+    addColumnSafely("monitor_configs", "models_synced_at DATETIME");
     addColumnSafely("hunt_findings", "analysis TEXT DEFAULT ''");
     addColumnSafely("hunt_findings", "source_urls TEXT DEFAULT '[]'");
     addColumnSafely("hunt_tasks", "progress TEXT DEFAULT '{}'");
@@ -491,6 +506,8 @@ export interface MonitorConfig {
   template_id: number | null;
   fallback_models: string;
   active_model: string;
+  all_models: string;
+  models_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -498,6 +515,7 @@ export interface MonitorConfig {
 export type MonitorConfigInput = Pick<MonitorConfig, "name" | "type" | "base_url" | "api_key" | "model" | "group_name" | "enabled"> & {
   template_id?: number | null;
   fallback_models?: string;
+  all_models?: string;
 };
 
 // ============ Monitor Templates ============
@@ -628,13 +646,15 @@ export function findMonitorConfigsByKey(apiKey: string): MonitorConfig[] {
 
 export function createMonitorConfig(input: MonitorConfigInput): MonitorConfig {
   const stmt = getDb().prepare(`
-    INSERT INTO monitor_configs (name, type, base_url, api_key, model, group_name, enabled, template_id, fallback_models)
-    VALUES (@name, @type, @base_url, @api_key, @model, @group_name, @enabled, @template_id, @fallback_models)
+    INSERT INTO monitor_configs (name, type, base_url, api_key, model, group_name, enabled, template_id, fallback_models, all_models, models_synced_at)
+    VALUES (@name, @type, @base_url, @api_key, @model, @group_name, @enabled, @template_id, @fallback_models, @all_models, @models_synced_at)
   `);
   const info = stmt.run({
     ...input,
     template_id: input.template_id ?? null,
     fallback_models: input.fallback_models ?? "[]",
+    all_models: input.all_models ?? "[]",
+    models_synced_at: input.all_models ? new Date().toISOString() : null,
   });
   return getMonitorConfigById(Number(info.lastInsertRowid))!;
 }
@@ -643,11 +663,16 @@ export function updateMonitorConfig(id: number, input: Partial<MonitorConfigInpu
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };
 
-  for (const key of ["name", "type", "base_url", "api_key", "model", "group_name", "enabled", "template_id", "fallback_models"] as const) {
+  for (const key of ["name", "type", "base_url", "api_key", "model", "group_name", "enabled", "template_id", "fallback_models", "all_models"] as const) {
     if (input[key] !== undefined) {
       fields.push(`${key} = @${key}`);
       values[key] = input[key];
     }
+  }
+  // 全量模型列表更新时同步记录时间
+  if (input.all_models !== undefined) {
+    fields.push("models_synced_at = @models_synced_at");
+    values.models_synced_at = new Date().toISOString();
   }
 
   if (fields.length === 0) return getMonitorConfigById(id);
@@ -988,6 +1013,57 @@ export function deleteHuntTask(id: number): boolean {
   });
   deleteMany();
   return true;
+}
+
+// ============ MCP Tokens ============
+
+export interface McpToken {
+  id: number;
+  name: string;
+  token: string;
+  created_by: number;
+  enabled: number;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export type McpTokenWithCreator = McpToken & { creator_username: string | null };
+
+export function createMcpToken(name: string, createdBy: number): McpToken {
+  const token = `keyspy_mcp_${randomBytes(24).toString("hex")}`;
+  const info = getDb().prepare(
+    "INSERT INTO mcp_tokens (name, token, created_by) VALUES (?, ?, ?)"
+  ).run(name, token, createdBy);
+  return getDb().prepare("SELECT * FROM mcp_tokens WHERE id = ?").get(info.lastInsertRowid) as McpToken;
+}
+
+export function getAllMcpTokens(): McpTokenWithCreator[] {
+  return getDb().prepare(`
+    SELECT t.*, u.username AS creator_username
+    FROM mcp_tokens t
+    LEFT JOIN users u ON u.id = t.created_by
+    ORDER BY t.created_at DESC
+  `).all() as McpTokenWithCreator[];
+}
+
+export function findEnabledMcpToken(token: string): McpToken | undefined {
+  return getDb().prepare(
+    "SELECT * FROM mcp_tokens WHERE token = ? AND enabled = 1"
+  ).get(token) as McpToken | undefined;
+}
+
+export function touchMcpToken(id: number): void {
+  getDb().prepare("UPDATE mcp_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+}
+
+export function setMcpTokenEnabled(id: number, enabled: boolean): McpToken | undefined {
+  getDb().prepare("UPDATE mcp_tokens SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
+  return getDb().prepare("SELECT * FROM mcp_tokens WHERE id = ?").get(id) as McpToken | undefined;
+}
+
+export function deleteMcpToken(id: number): boolean {
+  const info = getDb().prepare("DELETE FROM mcp_tokens WHERE id = ?").run(id);
+  return info.changes > 0;
 }
 
 export { getDb as getDatabase };

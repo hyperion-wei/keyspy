@@ -1123,50 +1123,30 @@ function ScanResultsTab() {
 
   /**
    * 核心测试函数（可复用）
-   * - 信息完整：先用现有信息测试，失败再遍历模板
-   * - 信息不全：直接遍历模板
-   * - 模板测试通过：自动更新 finding 的 provider/base_url/model
+   * 后端两级策略：先实测发现来源地址（base_url+model），失败再遍历模板；
+   * 模板测试通过：自动更新 finding 的 provider/base_url/model
    */
   async function testFinding(f: HuntFinding): Promise<TestResult> {
     const apiKey = f.key_value;
     if (!apiKey) return { success: false, latency_ms: 0, message: "无 API Key" };
 
-    // 信息完整 → 先用现有信息测试
-    if (f.base_url && f.model) {
-      try {
-        const res = await fetch("/api/hunt/test", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: apiKey,
-            base_url: f.base_url,
-            model: f.model,
-            provider: f.provider,
-          }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          return { success: true, latency_ms: data.latency_ms || 0, message: "Key 可用", response_preview: data.response_preview };
-        }
-        // 现有信息失败 → fallback 遍历模板
-      } catch (err) {
-        // 网络错误也 fallback 遍历模板
-      }
-    }
-
-    // 信息不全 或 现有信息失败 → 遍历模板
     try {
       const res = await fetch("/api/hunt/test-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey }),
+        body: JSON.stringify({
+          api_key: apiKey,
+          base_url: f.base_url,
+          model: f.model,
+          provider: f.provider,
+        }),
       });
       const data = await res.json();
       const workedList: WorkedTemplate[] = data.worked || [];
       const workedNames = workedList.map((w: { template: string }) => w.template).join(", ") || "";
 
-      // 模板测试通过 → 自动更新 finding
-      if (data.usable && workedList.length > 0) {
+      // 模板测试通过 → 自动更新 finding（「发现来源」命中时信息本就正确，无需更新）
+      if (data.usable && workedList.length > 0 && workedList[0].template !== "发现来源") {
         const best = workedList[0];
         try {
           await fetch("/api/hunt/results", {
@@ -1187,7 +1167,7 @@ function ScanResultsTab() {
         latency_ms: 0,
         message: data.usable
           ? `可用: ${workedNames}`
-          : `不可用 (测试了 ${data.results?.length || 0} 个模板均失败)`,
+          : `不可用 (测试了 ${data.results?.length || 0} 个目标均失败)`,
         worked: workedList,
       };
     } catch (err) {
