@@ -596,6 +596,8 @@ Token 以其创建者的身份执行操作；无效/停用的 Token 返回 `401`
 
 支持的 JSON-RPC 方法：`initialize`、`ping`、`tools/list`、`tools/call`、`notifications/initialized`。
 
+> **内部回环地址**：`tools/call` 会内部调用本应用的 REST API，默认使用 `http://127.0.0.1:<PORT>`。部署在反向代理/SSL 之后若进程无法回环该地址，可通过环境变量 `INTERNAL_BASE_URL` 显式覆盖。
+
 ### 工具清单（32 个）
 
 | 分组 | 工具 |

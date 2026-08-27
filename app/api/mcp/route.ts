@@ -756,6 +756,24 @@ async function handleMessage(msg: JsonRpcRequest, ctx: DelegateCtx): Promise<Jso
   }
 }
 
+// ====== 内部回环地址解析 ======
+
+/**
+ * 解析工具内部调用本应用 REST API 的基地址。
+ * 优先级：
+ * 1. INTERNAL_BASE_URL 环境变量（显式覆盖，如反代监听非标准端口/容器内网地址）；
+ * 2. 回退 http://127.0.0.1:<PORT|3000>（本机监听端口，进程必然可达）。
+ *
+ * 不使用请求自身的 origin：部署在反向代理/SSL 之后时，
+ * 进程 fetch 自己的公网地址会因 hairpin NAT/回环限制失败，
+ * 导致 initialize/tools/list 正常但所有 tools/call 报 fetch failed。
+ */
+function resolveInternalBaseUrl(): string {
+  const explicit = process.env.INTERNAL_BASE_URL?.trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+  return `http://127.0.0.1:${process.env.PORT || 3000}`;
+}
+
 // ====== HTTP 入口 ======
 
 /** 从 Authorization 头校验 MCP Token，返回转发的认证头 */
@@ -781,7 +799,7 @@ export async function POST(request: Request) {
   }
 
   const ctx: DelegateCtx = {
-    baseUrl: new URL(request.url).origin,
+    baseUrl: resolveInternalBaseUrl(),
     authHeader,
   };
 

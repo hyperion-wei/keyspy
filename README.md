@@ -287,6 +287,7 @@ keyspy/
 | `SESSION_SECRET` | 自定义会话密钥 | 自动生成 |
 | `NEXT_DISABLE_STANDALONE` | 禁用 standalone 输出 | - |
 | `NEXT_PUBLIC_BASE_URL` | 公开访问地址（SEO 用） | - |
+| `INTERNAL_BASE_URL` | MCP 工具内部调用本应用 REST API 的基地址（反向代理/容器等无法回环公网地址时显式指定） | `http://127.0.0.1:<PORT>` |
 
 ## API 端点
 
