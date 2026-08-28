@@ -815,7 +815,12 @@ async function crawlAndDownload(
             dirName === ".config" || dirName === ".agents" ||
             dirName === ".ssh" || dirName === ".aws" ||
             dirName === ".kube" || dirName === ".docker" ||
-            dirName === ".gnupg"
+            dirName === ".gnupg" ||
+            // AI Agent 配置目录（常存 API Key / Token / 模型配置）
+            dirName === ".hermes" || dirName === ".codebuddy" ||
+            dirName === ".claude" || dirName === ".cursor" ||
+            dirName === ".windsurf" || dirName === ".gemini" ||
+            dirName === ".continue" || dirName === ".aider"
           ) dirs.push(link);
         } else {
           files.push(link);

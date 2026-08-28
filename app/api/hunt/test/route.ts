@@ -1,5 +1,7 @@
 import { initDb } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
+import { ProxyAgent, request as undiciRequest } from "undici";
+import { Readable } from "node:stream";
 
 initDb();
 
@@ -135,7 +137,8 @@ interface TestAttemptResult {
  * 测试一个 LLM API Key 是否可用
  * 自动遍历多种 base URL 格式尝试
  *
- * Body: { api_key, base_url, model, provider? }
+ * Body: { api_key, base_url, model, provider?, proxy? }
+ * proxy 如 http://127.0.0.1:7890，可选，用于走代理验证（如需直连海外 API）
  * Returns: { success, latency_ms, message, response_preview?, url_used? }
  */
 export async function POST(request: Request) {
@@ -145,10 +148,23 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { api_key, base_url, model, provider } = body;
+  const { api_key, base_url, model, provider, proxy } = body;
 
   if (!api_key || !base_url || !model) {
     return Response.json({ error: "缺少必要参数 (api_key, base_url, model)" }, { status: 400 });
+  }
+
+  // 校验代理地址格式（http/https）
+  let proxyAgent: ProxyAgent | null = null;
+  if (proxy && typeof proxy === "string") {
+    try {
+      const proxyUrl = new URL(proxy);
+      if (proxyUrl.protocol === "http:" || proxyUrl.protocol === "https:") {
+        proxyAgent = new ProxyAgent(proxyUrl.toString());
+      }
+    } catch {
+      proxyAgent = null;
+    }
   }
 
   // 清理非 ASCII 字符
@@ -172,12 +188,35 @@ export async function POST(request: Request) {
 
     try {
       const req = buildTestRequest(type, cleanKey, url, cleanModel);
-      const response = await fetch(req.url, {
-        method: "POST",
-        headers: req.headers,
-        body: JSON.stringify(req.body),
-        signal: controller.signal,
-      });
+      const rawBody = JSON.stringify(req.body);
+      let response: Response;
+      if (proxyAgent) {
+        // 代理模式下用 undici 自身 request 发请求（Node 原生 fetch 不接受外部 undici dispatcher）
+        const undiciResp = await undiciRequest(req.url, {
+          method: "POST",
+          headers: req.headers,
+          body: rawBody,
+          headersTimeout: TEST_TIMEOUT_MS,
+          bodyTimeout: TEST_TIMEOUT_MS,
+          dispatcher: proxyAgent,
+        });
+        // IncomingHttpHeaders → Headers
+        const respHeaders = new Headers();
+        for (const [k, v] of Object.entries(undiciResp.headers)) {
+          if (v !== undefined) respHeaders.set(k, Array.isArray(v) ? v.join(", ") : String(v));
+        }
+        response = new Response(
+          Readable.toWeb(undiciResp.body) as unknown as BodyInit,
+          { status: undiciResp.statusCode, headers: respHeaders },
+        );
+      } else {
+        response = await fetch(req.url, {
+          method: "POST",
+          headers: req.headers,
+          body: rawBody,
+          signal: controller.signal,
+        });
+      }
 
       const latencyMs = Date.now() - startedAt;
       clearTimeout(timeout);
