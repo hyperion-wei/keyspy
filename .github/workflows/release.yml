@@ -1,0 +1,124 @@
+name: Release Linux Bundle
+
+# 产出「免安装版」Linux x64 包：Next.js standalone 产物 + 内置 Node 运行时 + gitleaks Linux 引擎
+# 弱机器只需 curl 解压即可跑，不在目标机上做任何构建。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建的 tag（如 v1.27.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: Build self-contained Linux bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.value }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build (standalone output)
+        run: pnpm build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Resolve component versions
+        id: ver
+        run: |
+          echo "node=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
+          GL=$(curl -sSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+            | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+          [ -z "$GL" ] && GL="v8.23.0"
+          echo "gitleaks=$GL" >> "$GITHUB_OUTPUT"
+          echo "bundled node: $(node -p 'process.versions.node') / gitleaks: $GL"
+
+      - name: Assemble bundle
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+          NODE_V: ${{ steps.ver.outputs.node }}
+          GL_TAG: ${{ steps.ver.outputs.gitleaks }}
+        run: |
+          set -euo pipefail
+          BUNDLE="keyspy-${TAG}-linux-x64"
+          rm -rf "$BUNDLE"; mkdir -p "$BUNDLE/app" "$BUNDLE/app/data" "$BUNDLE/app/tools/gitleaks"
+
+          # Next.js standalone 产物（含被 trace 过的 node_modules，better-sqlite3 为 linux 原生绑定）
+          cp -a .next/standalone/. "$BUNDLE/app/"
+          cp -a .next/static            "$BUNDLE/app/.next/static"
+          cp -a public                  "$BUNDLE/app/public"
+
+          # Hunt 扫描引擎：增强规则随仓库走，二进制从官方 release 拉取（仓库内 exe 不入库）
+          cp tools/gitleaks/enhanced-rules.toml "$BUNDLE/app/tools/gitleaks/"
+          GL_VER="${GL_TAG#v}"
+          curl -sSL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/${GL_TAG}/gitleaks_${GL_VER}_linux_x64.tar.gz"
+          tar -xzf gl.tgz gitleaks
+          install -m 0755 gitleaks "$BUNDLE/app/tools/gitleaks/gitleaks"
+          rm -rf gl.tgz gitleaks
+
+          # 内置 Node 运行时，目标机免装
+          curl -sSL -o node.tar.xz "https://nodejs.org/dist/v${NODE_V}/node-v${NODE_V}-linux-x64.tar.xz"
+          tar -xJf node.tar.xz "node-v${NODE_V}-linux-x64/bin/node"
+          install -m 0755 "node-v${NODE_V}-linux-x64/bin/node" "$BUNDLE/node"
+          rm -rf node.tar.xz "node-v${NODE_V}-linux-x64"
+
+          cp .github/assets/start.sh "$BUNDLE/start.sh"
+          cp .github/assets/keyspy.service "$BUNDLE/keyspy.service.example"
+          cp .github/assets/README-linux.md "$BUNDLE/README-linux.md"
+          chmod +x "$BUNDLE/start.sh"
+
+          tar -czf "${BUNDLE}.tar.gz" "$BUNDLE"
+          sha256sum "${BUNDLE}.tar.gz" | awk '{print $1}' > "${BUNDLE}.tar.gz.sha256"
+          du -sh "$BUNDLE" "${BUNDLE}.tar.gz"
+          ls -1 "$BUNDLE" "$BUNDLE/app" | head -40
+
+      - name: Create / upload GitHub Release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.value }}
+          NODE_V: ${{ steps.ver.outputs.node }}
+          GL_TAG: ${{ steps.ver.outputs.gitleaks }}
+        run: |
+          set -euo pipefail
+          BUNDLE="keyspy-${TAG}-linux-x64"
+          BODY="Linux x64 免安装版：内置 Node ${NODE_V}，含 gitleaks ${GL_TAG} Hunt 扫描引擎。目标机无需安装 Node / pnpm，解压后执行 ./start.sh 即可。"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "KeySpy ${TAG} (Linux x64 免安装版)" --notes "$BODY" --target "$TAG"
+          fi
+          gh release upload "$TAG" "${BUNDLE}.tar.gz" "${BUNDLE}.tar.gz.sha256" --clobber
+          gh release view "$TAG" --json tagName,assets --jq '{tag:.tagName, assets:[.assets[].name]}'

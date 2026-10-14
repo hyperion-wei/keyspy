@@ -1,0 +1,48 @@
+[Unit]
+Description=KeySpy - LLM Key 监控与 Hunt 扫描网关
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 免安装版解压到 /opt/keyspy 时的典型布局：/opt/keyspy/node + /opt/keyspy/app
+WorkingDirectory=/opt/keyspy/app
+ExecStart=/opt/keyspy/node --max-old-space-size=512 server.js
+User=keyspy
+Group=keyspy
+
+Environment=NODE_ENV=production
+# 只监听回环；需要外部直连时改成 0.0.0.0 并自行加反代/认证
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+Environment=INTERNAL_BASE_URL=http://127.0.0.1:3000
+Environment=GITLEAKS_PATH=/opt/keyspy/app/tools/gitleaks/gitleaks
+Environment=GITLEAKS_ENHANCED_RULES=/opt/keyspy/app/tools/gitleaks/enhanced-rules.toml
+Environment=NEXT_TELEMETRY_DISABLED=1
+
+# ---- 低配机器保护 ----
+MemoryHigh=600M
+MemoryMax=700M
+CPUQuota=150%
+CPUWeight=50
+StartupCPUWeight=10
+IOWeight=50
+Nice=10
+TasksMax=128
+LimitNOFILE=65535
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# 数据库与扫描临时产物需要写权限
+ReadWritePaths=/opt/keyspy/app/data
+# 保持 false：Hunt 扫描的临时抓取目录需跨调用可见
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
