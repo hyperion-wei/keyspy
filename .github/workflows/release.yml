@@ -118,7 +118,7 @@ jobs:
           BUNDLE="keyspy-${TAG}-linux-x64"
           BODY="Linux x64 免安装版：内置 Node ${NODE_V}，含 gitleaks ${GL_TAG} Hunt 扫描引擎。目标机无需安装 Node / pnpm，解压后执行 ./start.sh 即可。"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "KeySpy ${TAG} (Linux x64 免安装版)" --notes "$BODY" --target "$TAG"
+            gh release create "$TAG" --title "KeySpy ${TAG} (Linux x64 免安装版)" --notes "$BODY" --verify-tag
           fi
           gh release upload "$TAG" "${BUNDLE}.tar.gz" "${BUNDLE}.tar.gz.sha256" --clobber
           gh release view "$TAG" --json tagName,assets --jq '{tag:.tagName, assets:[.assets[].name]}'
